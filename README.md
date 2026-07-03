@@ -143,7 +143,7 @@ disponibilité, la méthode, les erreurs et une empreinte SHA-256 sont stockés.
 Effectuer un `POST` vers :
 
 ```text
-https://price-watch.example.com/api/cron/scrape
+https://zixsw7530bseuso30tid1xpp.217.160.121.83.sslip.io/api/cron/scrape
 ```
 
 avec l’en-tête :
@@ -157,7 +157,7 @@ Exemple :
 ```bash
 curl --fail --request POST \
   --header "Authorization: Bearer $CRON_SECRET" \
-  https://price-watch.example.com/api/cron/scrape
+  https://zixsw7530bseuso30tid1xpp.217.160.121.83.sslip.io/api/cron/scrape
 ```
 
 Un verrou PostgreSQL empêche deux exécutions simultanées.

@@ -2,7 +2,7 @@
 
 client_id = "1f54ab157ef54c68285c882b9c93462d"
 name = "Price Watch"
-application_url = "https://shopify.dev/apps/default-app-home"
+application_url = "https://zixsw7530bseuso30tid1xpp.217.160.121.83.sslip.io"
 embedded = true
 
 [access_scopes]
@@ -28,7 +28,7 @@ api_version = "2026-07"
   topics = ["products/delete"]
 
 [auth]
-redirect_urls = ["https://shopify.dev/apps/default-app-home/api/auth"]
+redirect_urls = ["https://zixsw7530bseuso30tid1xpp.217.160.121.83.sslip.io/api/auth"]
 
 [build]
 include_config_on_deploy = true
