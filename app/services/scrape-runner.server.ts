@@ -78,6 +78,7 @@ export async function runPriceWatch(options: {
   trigger: ScrapeTrigger;
   matchId?: string;
   force?: boolean;
+  testPendingMatch?: boolean;
 }) {
   const force = options.force === true;
   if (force && process.env.NODE_ENV === "production") {
@@ -90,7 +91,10 @@ export async function runPriceWatch(options: {
   try {
     const matches = await prisma.productMatch.findMany({
       where: {
-        status: "VALIDATED",
+        status:
+          options.matchId && options.testPendingMatch
+            ? { in: ["PENDING", "VALIDATED"] }
+            : "VALIDATED",
         ...(options.matchId ? { id: options.matchId } : {}),
         competitor: { active: true, legalStatus: "APPROVED" },
       },
@@ -132,7 +136,7 @@ export async function runPriceWatch(options: {
       const target = new URL(match.url);
       const robotsAllowed = robotsAllowsPath(
         match.competitor.robotsContent,
-        target.pathname,
+        `${target.pathname}${target.search}`,
       );
       if (!robotsAllowed && !match.competitor.robotsOverrideConfirmed) {
         await prisma.priceObservation.create({

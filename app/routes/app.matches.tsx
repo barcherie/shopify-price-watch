@@ -194,7 +194,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     if (intent === "scrape") {
-      const run = await runPriceWatch({ trigger: "MANUAL", matchId: id });
+      const run = await runPriceWatch({
+        trigger: "MANUAL",
+        matchId: id,
+        testPendingMatch: true,
+      });
       return {
         ok: run.succeeded === 1 || run.skipped === 1,
         message:
@@ -471,16 +475,17 @@ export default function MatchesPage() {
                         label="Rejeter"
                       />
                     )}
-                    {match.status === "VALIDATED" &&
-                      match.legalStatus === "APPROVED" &&
-                      match.active && (
-                        <MatchAction
-                          id={match.id}
-                          intent="scrape"
-                          label="Tester"
-                          icon="refresh"
-                        />
-                      )}
+                    {match.status !== "REJECTED" && (
+                      <MatchAction
+                        id={match.id}
+                        intent="scrape"
+                        label="Tester le relevé"
+                        icon="refresh"
+                        disabled={
+                          match.legalStatus !== "APPROVED" || !match.active
+                        }
+                      />
+                    )}
                     <MatchAction
                       id={match.id}
                       intent="delete"
@@ -519,6 +524,7 @@ function MatchAction({
   label,
   tone,
   icon,
+  disabled = false,
 }: {
   id: string;
   intent: "status" | "scrape" | "delete";
@@ -526,6 +532,7 @@ function MatchAction({
   label: string;
   tone?: "critical";
   icon?: "refresh" | "delete";
+  disabled?: boolean;
 }) {
   return (
     <Form method="post">
@@ -537,6 +544,7 @@ function MatchAction({
         variant="tertiary"
         {...(tone ? { tone } : {})}
         {...(icon ? { icon } : {})}
+        disabled={disabled}
       >
         {label}
       </s-button>

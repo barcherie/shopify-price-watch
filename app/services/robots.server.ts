@@ -3,6 +3,19 @@ import { fetchHtmlPage } from "./page-fetcher.server";
 
 type Rule = { type: "allow" | "disallow"; path: string };
 
+function ruleMatches(rulePath: string, target: string) {
+  const anchored = rulePath.endsWith("$");
+  const source = (anchored ? rulePath.slice(0, -1) : rulePath)
+    .split("*")
+    .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+    .join(".*");
+  return new RegExp(`^${source}${anchored ? "$" : ""}`).test(target);
+}
+
+function ruleSpecificity(rulePath: string) {
+  return rulePath.replace(/\*/g, "").replace(/\$$/, "").length;
+}
+
 function applicableRules(content: string) {
   const lines = content.split(/\r?\n/);
   const rules: Rule[] = [];
@@ -43,8 +56,12 @@ function applicableRules(content: string) {
 export function robotsAllowsPath(content: string | null, pathname: string) {
   if (!content) return true;
   const matches = applicableRules(content)
-    .filter((rule) => pathname.startsWith(rule.path.replace(/\*.*$/, "")))
-    .sort((a, b) => b.path.length - a.path.length);
+    .filter((rule) => ruleMatches(rule.path, pathname))
+    .sort(
+      (a, b) =>
+        ruleSpecificity(b.path) - ruleSpecificity(a.path) ||
+        (a.type === "allow" ? -1 : 1),
+    );
   return matches[0]?.type !== "disallow";
 }
 
