@@ -11,14 +11,14 @@ export type FetchedPage = {
   finalUrl: string;
 };
 
-function userAgent() {
+export function scraperUserAgent() {
   const email = process.env.SCRAPER_CONTACT_EMAIL?.trim();
   if (!email) {
     throw new Error(
       "SCRAPER_CONTACT_EMAIL doit être configuré avant tout relevé.",
     );
   }
-  return `PriceWatch/1.0 (Besancon Archerie; mailto:${email})`;
+  return `BesanconArcheriePriceWatch/1.0 (+mailto:${email})`;
 }
 
 async function readLimitedBody(response: Response) {
@@ -58,7 +58,7 @@ export async function fetchHtmlPage(
       redirect: "manual",
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
-        "user-agent": userAgent(),
+        "user-agent": scraperUserAgent(),
         accept: "text/html,application/xhtml+xml",
         "accept-language": "fr-FR,fr;q=0.9,en;q=0.5",
       },
@@ -102,7 +102,7 @@ export async function fetchRenderedPage(
   });
 
   try {
-    const context = await browser.newContext({ userAgent: userAgent() });
+    const context = await browser.newContext({ userAgent: scraperUserAgent() });
     const page = await context.newPage();
     const checkedHosts = new Map<string, Promise<void>>();
 

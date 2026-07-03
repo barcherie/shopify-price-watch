@@ -35,15 +35,15 @@ const LEGAL_STATUS_TONES = {
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
   const url = new URL(request.url);
-  const selectedVariantId = url.searchParams.get("variant") || "";
+  const selectedProductId =
+    url.searchParams.get("product") || url.searchParams.get("variant") || "";
   const query = url.searchParams.get("q")?.trim() || "";
   const status = url.searchParams.get("status") || "";
 
-  const [initialVariant, competitors, matches] = await Promise.all([
-    selectedVariantId
-      ? prisma.shopifyVariant.findUnique({
-          where: { id: selectedVariantId },
-          include: { product: true },
+  const [initialProduct, competitors, matches] = await Promise.all([
+    selectedProductId
+      ? prisma.shopifyProduct.findUnique({
+          where: { id: selectedProductId },
         })
       : null,
     prisma.competitor.findMany({
@@ -57,15 +57,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           ? {
               OR: [
                 {
-                  variant: {
-                    product: {
-                      title: { contains: query, mode: "insensitive" },
-                    },
+                  product: {
+                    title: { contains: query, mode: "insensitive" },
                   },
                 },
                 {
-                  variant: {
-                    sku: { contains: query, mode: "insensitive" },
+                  product: {
+                    vendor: { contains: query, mode: "insensitive" },
                   },
                 },
                 {
@@ -79,7 +77,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       },
       include: {
         competitor: true,
-        variant: { include: { product: true } },
+        product: true,
         observations: { orderBy: { observedAt: "desc" }, take: 1 },
       },
       orderBy: { updatedAt: "desc" },
@@ -89,25 +87,29 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return {
     filters: { query, status },
-    initialVariant: initialVariant
+    initialProduct: initialProduct
       ? {
-          shopifyId: initialVariant.shopifyId,
-          productTitle: initialVariant.product.title,
-          variantTitle: initialVariant.title,
-          sku: initialVariant.sku,
+          shopifyId: initialProduct.shopifyId,
+          title: initialProduct.title,
+          vendor: initialProduct.vendor,
+          imageUrl: initialProduct.featuredImageUrl,
+          imageAlt: initialProduct.featuredImageAlt,
+          price: initialProduct.price.toString(),
+          currencyCode: initialProduct.currencyCode,
         }
       : null,
     competitors,
     matches: matches.map((match) => ({
       id: match.id,
-      product: match.variant.product.title,
-      variant: match.variant.title,
-      sku: match.variant.sku,
+      product: match.product.title,
+      vendor: match.product.vendor,
+      imageUrl: match.product.featuredImageUrl,
+      imageAlt: match.product.featuredImageAlt,
+      shopifyPrice: match.product.price.toString(),
+      currencyCode: match.product.currencyCode,
       competitor: match.competitor.name,
       url: match.url,
       status: match.status,
-      confidenceScore: match.confidenceScore,
-      internalNote: match.internalNote,
       legalStatus: match.competitor.legalStatus,
       active: match.competitor.active,
       latest: match.observations[0]
@@ -129,20 +131,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   try {
     if (intent === "create") {
-      const variantShopifyId = String(formData.get("variantShopifyId") || "");
+      const productShopifyId = String(formData.get("productShopifyId") || "");
       const competitorId = String(formData.get("competitorId") || "");
-      const [variant, competitor] = await Promise.all([
-        prisma.shopifyVariant.findUnique({
-          where: { shopifyId: variantShopifyId },
+      const [product, competitor] = await Promise.all([
+        prisma.shopifyProduct.findUnique({
+          where: { shopifyId: productShopifyId },
         }),
         prisma.competitor.findUnique({ where: { id: competitorId } }),
       ]);
 
-      if (!variant?.active) {
+      if (!product || product.status === "DELETED") {
         return {
           ok: false,
           message:
-            "Variante introuvable dans Price Watch. Synchronisez Shopify puis réessayez.",
+            "Produit introuvable dans Price Watch. Synchronisez Shopify puis réessayez.",
         };
       }
       if (!competitor) {
@@ -153,28 +155,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         String(formData.get("url") || ""),
         competitor.domain,
       ).toString();
-      const scoreText = String(formData.get("confidenceScore") || "").trim();
-      const confidenceScore = scoreText ? Number(scoreText) : null;
-      if (
-        confidenceScore !== null &&
-        (!Number.isInteger(confidenceScore) ||
-          confidenceScore < 0 ||
-          confidenceScore > 100)
-      ) {
-        return {
-          ok: false,
-          message: "Le score doit être compris entre 0 et 100.",
-        };
-      }
-
       await prisma.productMatch.create({
         data: {
-          variantId: variant.id,
+          productId: product.id,
           competitorId,
           url,
-          confidenceScore,
-          internalNote:
-            String(formData.get("internalNote") || "").trim() || null,
         },
       });
       return {
@@ -211,11 +196,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (intent === "scrape") {
       const run = await runPriceWatch({ trigger: "MANUAL", matchId: id });
       return {
-        ok: run.succeeded === 1,
+        ok: run.succeeded === 1 || run.skipped === 1,
         message:
           run.succeeded === 1
             ? "Prix relevé."
-            : "Le relevé a échoué. Consultez le dernier message.",
+            : run.skipped === 1
+              ? "Ce produit a déjà été vérifié au cours des dernières 24 heures."
+              : "Le relevé a échoué. Consultez le dernier message.",
       };
     }
 
@@ -228,20 +215,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 };
 
-type PickedVariant = {
+type PickedProduct = {
   shopifyId: string;
-  productTitle: string;
-  variantTitle: string;
-  sku: string | null;
+  title: string;
+  vendor: string | null;
+  imageUrl: string | null;
+  imageAlt: string | null;
+  price: string;
+  currencyCode: string;
 };
 
 export default function MatchesPage() {
-  const { competitors, matches, initialVariant, filters } =
+  const { competitors, matches, initialProduct, filters } =
     useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const shopify = useAppBridge();
-  const [pickedVariant, setPickedVariant] = useState<PickedVariant | null>(
-    initialVariant,
+  const [pickedProduct, setPickedProduct] = useState<PickedProduct | null>(
+    initialProduct,
   );
 
   useEffect(() => {
@@ -261,18 +251,22 @@ export default function MatchesPage() {
 
   async function openProductPicker() {
     const selection = await shopify.resourcePicker({
-      type: "variant",
+      type: "product",
       action: "select",
       multiple: false,
+      filter: { variants: false },
     });
-    const variant = selection?.[0];
-    if (!variant) return;
+    const product = selection?.[0];
+    if (!product) return;
 
-    setPickedVariant({
-      shopifyId: variant.id,
-      productTitle: variant.product?.title || variant.displayName,
-      variantTitle: variant.title,
-      sku: variant.sku || null,
+    setPickedProduct({
+      shopifyId: product.id,
+      title: product.title,
+      vendor: product.vendor || null,
+      imageUrl: product.images?.[0]?.originalSrc || null,
+      imageAlt: product.images?.[0]?.altText || null,
+      price: product.variants?.[0]?.price || "—",
+      currencyCode: "EUR",
     });
   }
 
@@ -283,8 +277,8 @@ export default function MatchesPage() {
           <input type="hidden" name="intent" value="create" />
           <input
             type="hidden"
-            name="variantShopifyId"
-            value={pickedVariant?.shopifyId || ""}
+            name="productShopifyId"
+            value={pickedProduct?.shopifyId || ""}
           />
           <s-stack gap="base">
             <s-box
@@ -299,27 +293,36 @@ export default function MatchesPage() {
                 alignItems="center"
                 justifyContent="space-between"
               >
-                <s-stack gap="small-200">
-                  <s-text type="strong">
-                    {pickedVariant
-                      ? pickedVariant.productTitle
-                      : "Aucun produit sélectionné"}
-                  </s-text>
-                  <s-text color="subdued">
-                    {pickedVariant
-                      ? `${pickedVariant.variantTitle} · ${
-                          pickedVariant.sku || "Sans SKU"
-                        }`
-                      : "Utilisez le sélecteur Shopify pour choisir une variante."}
-                  </s-text>
+                <s-stack direction="inline" gap="base" alignItems="center">
+                  {pickedProduct?.imageUrl && (
+                    <s-thumbnail
+                      src={pickedProduct.imageUrl}
+                      alt={pickedProduct.imageAlt || pickedProduct.title}
+                      size="small"
+                    />
+                  )}
+                  <s-stack gap="small-200">
+                    <s-text type="strong">
+                      {pickedProduct
+                        ? pickedProduct.title
+                        : "Aucun produit sélectionné"}
+                    </s-text>
+                    <s-text color="subdued">
+                      {pickedProduct
+                        ? `${pickedProduct.vendor || "Sans marque"} · ${
+                            pickedProduct.price
+                          } ${pickedProduct.currencyCode}`
+                        : "Utilisez le Product Picker Shopify."}
+                    </s-text>
+                  </s-stack>
                 </s-stack>
                 <s-button
                   type="button"
                   icon="product"
-                  variant={pickedVariant ? "secondary" : "primary"}
+                  variant={pickedProduct ? "secondary" : "primary"}
                   onClick={openProductPicker}
                 >
-                  {pickedVariant ? "Changer" : "Choisir dans Shopify"}
+                  {pickedProduct ? "Changer" : "Choisir dans Shopify"}
                 </s-button>
               </s-stack>
             </s-box>
@@ -347,21 +350,12 @@ export default function MatchesPage() {
                 required
                 placeholder="https://concurrent.fr/produit"
               />
-              <s-number-field
-                label="Score de confiance"
-                name="confidenceScore"
-                min={0}
-                max={100}
-                suffix="%"
-                details="Facultatif, de 0 à 100"
-              />
-              <s-text-area label="Note interne" name="internalNote" rows={3} />
             </s-grid>
             <s-stack direction="inline" justifyContent="end">
               <s-button
                 type="submit"
                 variant="primary"
-                disabled={!pickedVariant}
+                disabled={!pickedProduct}
               >
                 Ajouter à vérifier
               </s-button>
@@ -420,7 +414,8 @@ export default function MatchesPage() {
                   <s-stack gap="small-200">
                     <s-text type="strong">{match.product}</s-text>
                     <s-text color="subdued">
-                      {match.variant} · {match.sku || "Sans SKU"}
+                      {match.vendor || "Sans marque"} · {match.shopifyPrice}{" "}
+                      {match.currencyCode}
                     </s-text>
                     <s-link href={match.url} target="_blank">
                       Ouvrir chez le concurrent

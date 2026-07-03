@@ -1,25 +1,37 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomInt, randomUUID } from "node:crypto";
 import type { ScrapeTrigger } from "@prisma/client";
 import prisma from "../db.server";
 import { extractPriceFromHtml } from "./price-extractor.server";
 import { fetchHtmlPage, fetchRenderedPage } from "./page-fetcher.server";
+import { robotsAllowsPath } from "./robots.server";
 import { UnsafeUrlError } from "./url-safety.server";
 
 const LOCK_ID = "price-watch-scrape";
 const LOCK_DURATION_MS = 30 * 60 * 1000;
+export const SCRAPE_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 
 export class ScrapeAlreadyRunningError extends Error {}
+
+export function isScrapeDue(
+  lastScrapedAt: Date | null,
+  now = new Date(),
+  force = false,
+) {
+  return (
+    force ||
+    !lastScrapedAt ||
+    now.getTime() - lastScrapedAt.getTime() >= SCRAPE_COOLDOWN_MS
+  );
+}
 
 async function acquireLock() {
   const token = randomUUID();
   const now = new Date();
-
   await prisma.jobLock.upsert({
     where: { id: LOCK_ID },
     update: {},
     create: { id: LOCK_ID, lockedUntil: new Date(0) },
   });
-
   const acquired = await prisma.jobLock.updateMany({
     where: { id: LOCK_ID, lockedUntil: { lt: now } },
     data: {
@@ -27,7 +39,6 @@ async function acquireLock() {
       lockedUntil: new Date(now.getTime() + LOCK_DURATION_MS),
     },
   });
-
   if (acquired.count !== 1) throw new ScrapeAlreadyRunningError();
   return token;
 }
@@ -66,7 +77,13 @@ function errorDetails(error: unknown) {
 export async function runPriceWatch(options: {
   trigger: ScrapeTrigger;
   matchId?: string;
+  force?: boolean;
 }) {
+  const force = options.force === true;
+  if (force && process.env.NODE_ENV === "production") {
+    throw new Error("Le mode FORCE est interdit en production.");
+  }
+
   const lockToken = await acquireLock();
   let runId: string | null = null;
 
@@ -75,45 +92,79 @@ export async function runPriceWatch(options: {
       where: {
         status: "VALIDATED",
         ...(options.matchId ? { id: options.matchId } : {}),
-        competitor: {
-          active: true,
-          legalStatus: "APPROVED",
-        },
+        competitor: { active: true, legalStatus: "APPROVED" },
       },
       include: { competitor: true },
       orderBy: [{ competitorId: "asc" }, { createdAt: "asc" }],
     });
 
     const run = await prisma.scrapeRun.create({
-      data: {
-        trigger: options.trigger,
-        total: matches.length,
-      },
+      data: { trigger: options.trigger, total: matches.length },
     });
     runId = run.id;
 
     let succeeded = 0;
     let failed = 0;
-    const lastRequestAt = new Map<string, number>();
+    let skipped = 0;
+    let hasMadeRequest = false;
 
     for (const match of matches) {
       await renewLock(lockToken);
+      const now = new Date();
 
-      const minimumDelay = Math.ceil(
-        60_000 / Math.max(1, match.competitor.requestsPerMinute),
-      );
-      const previousRequest = lastRequestAt.get(match.competitorId);
-      if (previousRequest) {
-        const remaining = minimumDelay - (Date.now() - previousRequest);
-        if (remaining > 0) await wait(remaining);
+      if (!isScrapeDue(match.lastScrapedAt, now, force)) {
+        await prisma.priceObservation.create({
+          data: {
+            matchId: match.id,
+            competitorId: match.competitorId,
+            scrapeRunId: run.id,
+            url: match.url,
+            durationMs: 0,
+            success: false,
+            errorCode: "SKIPPED_24H",
+            errorMessage: "URL déjà relevée au cours des dernières 24 heures.",
+          },
+        });
+        skipped += 1;
+        continue;
       }
-      lastRequestAt.set(match.competitorId, Date.now());
 
+      const target = new URL(match.url);
+      const robotsAllowed = robotsAllowsPath(
+        match.competitor.robotsContent,
+        target.pathname,
+      );
+      if (!robotsAllowed && !match.competitor.robotsOverrideConfirmed) {
+        await prisma.priceObservation.create({
+          data: {
+            matchId: match.id,
+            competitorId: match.competitorId,
+            scrapeRunId: run.id,
+            url: match.url,
+            durationMs: 0,
+            success: false,
+            errorCode: "ROBOTS_DISALLOWED",
+            errorMessage:
+              "robots.txt interdit ce chemin. Une confirmation manuelle est requise.",
+          },
+        });
+        failed += 1;
+        continue;
+      }
+
+      if (hasMadeRequest) {
+        await wait(randomInt(2_000, 5_001));
+      }
+      hasMadeRequest = true;
+
+      const startedAt = Date.now();
+      let httpStatus: number | null = null;
       try {
         const page =
           match.competitor.renderMode === "BROWSER"
             ? await fetchRenderedPage(match.url, match.competitor.domain)
             : await fetchHtmlPage(match.url, match.competitor.domain);
+        httpStatus = page.status;
 
         if (page.status === 403 || page.status === 429) {
           await prisma.competitor.update({
@@ -141,12 +192,16 @@ export async function runPriceWatch(options: {
         await prisma.priceObservation.create({
           data: {
             matchId: match.id,
+            competitorId: match.competitorId,
             scrapeRunId: run.id,
+            url: page.finalUrl,
             price: extracted.price,
             currencyCode: extracted.currencyCode,
             availability: extracted.availability,
             extractionMethod: extracted.method,
             httpStatus: page.status,
+            durationMs: Date.now() - startedAt,
+            success: true,
             sourceHash: createHash("sha256").update(page.html).digest("hex"),
           },
         });
@@ -156,7 +211,12 @@ export async function runPriceWatch(options: {
         await prisma.priceObservation.create({
           data: {
             matchId: match.id,
+            competitorId: match.competitorId,
             scrapeRunId: run.id,
+            url: match.url,
+            httpStatus,
+            durationMs: Date.now() - startedAt,
+            success: false,
             errorCode: details.code,
             errorMessage: details.message,
           },
@@ -165,7 +225,7 @@ export async function runPriceWatch(options: {
       } finally {
         await prisma.productMatch.update({
           where: { id: match.id },
-          data: { lastCheckedAt: new Date() },
+          data: { lastScrapedAt: new Date() },
         });
       }
     }
@@ -178,6 +238,7 @@ export async function runPriceWatch(options: {
         status,
         succeeded,
         failed,
+        skipped,
         finishedAt: new Date(),
       },
     });

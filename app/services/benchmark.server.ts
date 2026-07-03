@@ -2,45 +2,122 @@ import prisma from "../db.server";
 
 export type BenchmarkStatus = "TOP_PRICE" | "COMPETITIVE" | "WATCH" | "FIX";
 
-export type BenchmarkRow = {
-  variantId: string;
+export type BenchmarkInput = {
+  productId: string;
   productTitle: string;
-  variantTitle: string;
   vendor: string | null;
   category: string | null;
-  sku: string | null;
+  featuredImageUrl: string | null;
+  featuredImageAlt: string | null;
+  shopifyPrice: number;
+  currencyCode: string;
+  matches: Array<{
+    status: "PENDING" | "VALIDATED" | "REJECTED";
+    competitorName: string;
+    price: number | null;
+    currencyCode: string | null;
+    observedAt: Date | null;
+  }>;
+};
+
+export type BenchmarkRow = {
+  productId: string;
+  productTitle: string;
+  vendor: string | null;
+  category: string | null;
+  featuredImageUrl: string | null;
+  featuredImageAlt: string | null;
   shopifyPrice: number;
   currencyCode: string;
   bestCompetitorPrice: number | null;
   bestCompetitorName: string | null;
+  competitorNames: string[];
   differenceAmount: number | null;
   differencePercent: number | null;
   cheaperCompetitors: number;
+  moreExpensiveCompetitors: number;
   matchCount: number;
   status: BenchmarkStatus;
   lastObservedAt: string | null;
 };
 
-function statusFromDifference(
+export function statusFromDifference(
   shopifyPrice: number,
   bestPrice: number | null,
 ): BenchmarkStatus {
   if (bestPrice === null || bestPrice <= 0) return "WATCH";
   const differencePercent = ((shopifyPrice - bestPrice) / bestPrice) * 100;
   if (differencePercent <= 0) return "TOP_PRICE";
-  if (differencePercent <= 3) return "COMPETITIVE";
-  if (differencePercent <= 8) return "WATCH";
+  if (differencePercent < 2) return "COMPETITIVE";
+  if (differencePercent <= 5) return "WATCH";
   return "FIX";
 }
 
+export function buildBenchmarkRows(products: BenchmarkInput[]): BenchmarkRow[] {
+  return products.flatMap((product) => {
+    const validatedMatches = product.matches.filter(
+      (match) => match.status === "VALIDATED",
+    );
+    if (!validatedMatches.length) return [];
+
+    const observations = validatedMatches
+      .filter(
+        (match) =>
+          match.price !== null &&
+          match.price > 0 &&
+          match.currencyCode === product.currencyCode,
+      )
+      .sort((a, b) => (a.price || 0) - (b.price || 0));
+    const best = observations[0] || null;
+    const bestPrice = best?.price ?? null;
+    const differenceAmount =
+      bestPrice === null ? null : product.shopifyPrice - bestPrice;
+    const differencePercent =
+      bestPrice === null
+        ? null
+        : ((product.shopifyPrice - bestPrice) / bestPrice) * 100;
+
+    return [
+      {
+        productId: product.productId,
+        productTitle: product.productTitle,
+        vendor: product.vendor,
+        category: product.category,
+        featuredImageUrl: product.featuredImageUrl,
+        featuredImageAlt: product.featuredImageAlt,
+        shopifyPrice: product.shopifyPrice,
+        currencyCode: product.currencyCode,
+        bestCompetitorPrice: bestPrice,
+        bestCompetitorName: best?.competitorName ?? null,
+        competitorNames: validatedMatches.map((match) => match.competitorName),
+        differenceAmount,
+        differencePercent,
+        cheaperCompetitors: observations.filter(
+          (observation) => (observation.price || 0) < product.shopifyPrice,
+        ).length,
+        moreExpensiveCompetitors: observations.filter(
+          (observation) => (observation.price || 0) > product.shopifyPrice,
+        ).length,
+        matchCount: validatedMatches.length,
+        status: statusFromDifference(product.shopifyPrice, bestPrice),
+        lastObservedAt:
+          observations
+            .map((observation) => observation.observedAt)
+            .filter((date): date is Date => date !== null)
+            .sort((a, b) => b.getTime() - a.getTime())[0]
+            ?.toISOString() ?? null,
+      },
+    ];
+  });
+}
+
 export async function getBenchmarkRows(): Promise<BenchmarkRow[]> {
-  const variants = await prisma.shopifyVariant.findMany({
+  const products = await prisma.shopifyProduct.findMany({
     where: {
-      active: true,
-      product: { status: { not: "DELETED" } },
+      status: { not: "DELETED" },
+      matches: { some: { status: "VALIDATED" } },
     },
     include: {
-      product: true,
       matches: {
         where: {
           status: "VALIDATED",
@@ -49,63 +126,35 @@ export async function getBenchmarkRows(): Promise<BenchmarkRow[]> {
         include: {
           competitor: true,
           observations: {
-            where: { price: { not: null } },
+            where: { success: true, price: { not: null } },
             orderBy: { observedAt: "desc" },
             take: 1,
           },
         },
       },
     },
-    orderBy: [{ product: { title: "asc" } }, { title: "asc" }],
+    orderBy: { title: "asc" },
   });
 
-  return variants.map((variant) => {
-    const shopifyPrice = Number(variant.price);
-    const observations = variant.matches
-      .map((match) => {
-        const observation = match.observations[0];
-        if (
-          !observation?.price ||
-          observation.currencyCode !== variant.currencyCode
-        ) {
-          return null;
-        }
-        return {
-          price: Number(observation.price),
-          competitor: match.competitor.name,
-          observedAt: observation.observedAt,
-        };
-      })
-      .filter((value): value is NonNullable<typeof value> => value !== null)
-      .sort((a, b) => a.price - b.price);
-
-    const best = observations[0] || null;
-    const differenceAmount = best ? shopifyPrice - best.price : null;
-    const differencePercent =
-      best && best.price > 0
-        ? ((shopifyPrice - best.price) / best.price) * 100
-        : null;
-
-    return {
-      variantId: variant.id,
-      productTitle: variant.product.title,
-      variantTitle: variant.title,
-      vendor: variant.product.vendor,
-      category:
-        variant.product.categoryName || variant.product.productType || null,
-      sku: variant.sku,
-      shopifyPrice,
-      currencyCode: variant.currencyCode,
-      bestCompetitorPrice: best?.price ?? null,
-      bestCompetitorName: best?.competitor ?? null,
-      differenceAmount,
-      differencePercent,
-      cheaperCompetitors: observations.filter(
-        (observation) => observation.price < shopifyPrice,
-      ).length,
-      matchCount: variant.matches.length,
-      status: statusFromDifference(shopifyPrice, best?.price ?? null),
-      lastObservedAt: best?.observedAt.toISOString() ?? null,
-    };
-  });
+  return buildBenchmarkRows(
+    products.map((product) => ({
+      productId: product.id,
+      productTitle: product.title,
+      vendor: product.vendor,
+      category: product.categoryName || product.productType || null,
+      featuredImageUrl: product.featuredImageUrl,
+      featuredImageAlt: product.featuredImageAlt,
+      shopifyPrice: Number(product.price),
+      currencyCode: product.currencyCode,
+      matches: product.matches.map((match) => ({
+        status: match.status,
+        competitorName: match.competitor.name,
+        price: match.observations[0]?.price
+          ? Number(match.observations[0].price)
+          : null,
+        currencyCode: match.observations[0]?.currencyCode || null,
+        observedAt: match.observations[0]?.observedAt || null,
+      })),
+    })),
+  );
 }

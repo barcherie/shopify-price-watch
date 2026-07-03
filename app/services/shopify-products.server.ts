@@ -1,4 +1,3 @@
-import type { Prisma } from "@prisma/client";
 import prisma from "../db.server";
 
 type GraphqlClient = {
@@ -8,27 +7,25 @@ type GraphqlClient = {
   ) => Promise<Response>;
 };
 
-type ShopifyVariantNode = {
-  id: string;
-  title: string;
-  sku: string | null;
-  barcode: string | null;
-  price: string;
-  selectedOptions: Array<{ name: string; value: string }>;
-};
-
 type ShopifyProductNode = {
   id: string;
   title: string;
-  vendor: string | null;
   handle: string;
+  vendor: string | null;
   productType: string;
   status: string;
   onlineStoreUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
   category: { name: string } | null;
+  featuredImage: { url: string; altText: string | null } | null;
   variants: {
-    nodes: ShopifyVariantNode[];
-    pageInfo: { hasNextPage: boolean; endCursor: string | null };
+    nodes: Array<{
+      id: string;
+      title: string;
+      sku: string | null;
+      price: string;
+    }>;
   };
 };
 
@@ -36,22 +33,17 @@ const PRODUCT_FIELDS = `#graphql
   fragment PriceWatchProduct on Product {
     id
     title
-    vendor
     handle
+    vendor
     productType
     status
     onlineStoreUrl
+    createdAt
+    updatedAt
     category { name }
-    variants(first: 100) {
-      nodes {
-        id
-        title
-        sku
-        barcode
-        price
-        selectedOptions { name value }
-      }
-      pageInfo { hasNextPage endCursor }
+    featuredImage { url altText }
+    variants(first: 1) {
+      nodes { id title sku price }
     }
   }
 `;
@@ -67,146 +59,68 @@ async function readGraphql<T>(
     data: T;
     errors?: Array<{ message: string }>;
   };
-
   if (payload.errors?.length) {
     throw new Error(payload.errors.map((error) => error.message).join("; "));
   }
-
   return payload;
-}
-
-async function loadRemainingVariants(
-  admin: GraphqlClient,
-  product: ShopifyProductNode,
-) {
-  let cursor = product.variants.pageInfo.endCursor;
-  let hasNextPage = product.variants.pageInfo.hasNextPage;
-
-  while (hasNextPage) {
-    const response = await admin.graphql(
-      `#graphql
-        query PriceWatchProductVariants($id: ID!, $after: String) {
-          product(id: $id) {
-            variants(first: 100, after: $after) {
-              nodes {
-                id
-                title
-                sku
-                barcode
-                price
-                selectedOptions { name value }
-              }
-              pageInfo { hasNextPage endCursor }
-            }
-          }
-        }
-      `,
-      { variables: { id: product.id, after: cursor } },
-    );
-
-    const payload = await readGraphql<{
-      product: {
-        variants: ShopifyProductNode["variants"];
-      } | null;
-    }>(response);
-
-    if (!payload.data.product) break;
-
-    product.variants.nodes.push(...payload.data.product.variants.nodes);
-    hasNextPage = payload.data.product.variants.pageInfo.hasNextPage;
-    cursor = payload.data.product.variants.pageInfo.endCursor;
-  }
 }
 
 async function persistProduct(
   product: ShopifyProductNode,
   currencyCode: string,
 ) {
+  const firstVariant = product.variants.nodes[0] || null;
   const now = new Date();
-  const storedProduct = await prisma.shopifyProduct.upsert({
+
+  return prisma.shopifyProduct.upsert({
     where: { shopifyId: product.id },
     update: {
       title: product.title,
-      vendor: product.vendor || null,
       handle: product.handle,
+      vendor: product.vendor || null,
       productType: product.productType || null,
       categoryName: product.category?.name || null,
+      featuredImageUrl: product.featuredImage?.url || null,
+      featuredImageAlt: product.featuredImage?.altText || null,
       onlineStoreUrl: product.onlineStoreUrl,
       status: product.status,
+      firstVariantShopifyId: firstVariant?.id || null,
+      firstVariantTitle: firstVariant?.title || null,
+      firstVariantSku: firstVariant?.sku || null,
+      price: firstVariant?.price || "0",
+      currencyCode,
+      shopifyCreatedAt: new Date(product.createdAt),
+      shopifyUpdatedAt: new Date(product.updatedAt),
       syncedAt: now,
     },
     create: {
       shopifyId: product.id,
       title: product.title,
-      vendor: product.vendor || null,
       handle: product.handle,
+      vendor: product.vendor || null,
       productType: product.productType || null,
       categoryName: product.category?.name || null,
+      featuredImageUrl: product.featuredImage?.url || null,
+      featuredImageAlt: product.featuredImage?.altText || null,
       onlineStoreUrl: product.onlineStoreUrl,
       status: product.status,
+      firstVariantShopifyId: firstVariant?.id || null,
+      firstVariantTitle: firstVariant?.title || null,
+      firstVariantSku: firstVariant?.sku || null,
+      price: firstVariant?.price || "0",
+      currencyCode,
+      shopifyCreatedAt: new Date(product.createdAt),
+      shopifyUpdatedAt: new Date(product.updatedAt),
       syncedAt: now,
     },
   });
-
-  const seenVariantIds: string[] = [];
-  for (const variant of product.variants.nodes) {
-    seenVariantIds.push(variant.id);
-    const selectedOptions = variant.selectedOptions as Prisma.InputJsonValue;
-
-    await prisma.shopifyVariant.upsert({
-      where: { shopifyId: variant.id },
-      update: {
-        productId: storedProduct.id,
-        title: variant.title,
-        sku: variant.sku || null,
-        barcode: variant.barcode || null,
-        price: variant.price,
-        currencyCode,
-        selectedOptions,
-        active: true,
-        syncedAt: now,
-      },
-      create: {
-        shopifyId: variant.id,
-        productId: storedProduct.id,
-        title: variant.title,
-        sku: variant.sku || null,
-        barcode: variant.barcode || null,
-        price: variant.price,
-        currencyCode,
-        selectedOptions,
-        syncedAt: now,
-      },
-    });
-  }
-
-  await prisma.shopifyVariant.updateMany({
-    where: {
-      productId: storedProduct.id,
-      ...(seenVariantIds.length
-        ? { shopifyId: { notIn: seenVariantIds } }
-        : {}),
-    },
-    data: { active: false, syncedAt: now },
-  });
-
-  if (seenVariantIds.length) {
-    await prisma.shopifyVariant.updateMany({
-      where: { shopifyId: { in: seenVariantIds } },
-      data: { active: true },
-    });
-  }
-
-  return { product: storedProduct, variants: seenVariantIds.length };
 }
 
 export async function syncAllProducts(admin: GraphqlClient) {
   let cursor: string | null = null;
   let hasNextPage = true;
   let productCount = 0;
-  let variantCount = 0;
   const seenProductIds: string[] = [];
-  const seenVariantIds: string[] = [];
   let currencyCode = "EUR";
 
   while (hasNextPage) {
@@ -214,7 +128,7 @@ export async function syncAllProducts(admin: GraphqlClient) {
       `${PRODUCT_FIELDS}
        query PriceWatchProducts($after: String) {
          shop { currencyCode }
-         products(first: 50, after: $after, sortKey: ID) {
+         products(first: 100, after: $after, sortKey: ID) {
            nodes { ...PriceWatchProduct }
            pageInfo { hasNextPage endCursor }
          }
@@ -231,37 +145,24 @@ export async function syncAllProducts(admin: GraphqlClient) {
     }>(response);
 
     currencyCode = payload.data.shop.currencyCode;
-
     for (const product of payload.data.products.nodes) {
-      await loadRemainingVariants(admin, product);
-      const result = await persistProduct(product, currencyCode);
+      await persistProduct(product, currencyCode);
       seenProductIds.push(product.id);
-      seenVariantIds.push(
-        ...product.variants.nodes.map((variant) => variant.id),
-      );
       productCount += 1;
-      variantCount += result.variants;
     }
 
     hasNextPage = payload.data.products.pageInfo.hasNextPage;
     cursor = payload.data.products.pageInfo.endCursor;
   }
 
-  const now = new Date();
   await prisma.shopifyProduct.updateMany({
     where: seenProductIds.length
       ? { shopifyId: { notIn: seenProductIds } }
       : undefined,
-    data: { status: "DELETED", syncedAt: now },
-  });
-  await prisma.shopifyVariant.updateMany({
-    where: seenVariantIds.length
-      ? { shopifyId: { notIn: seenVariantIds } }
-      : undefined,
-    data: { active: false, syncedAt: now },
+    data: { status: "DELETED", syncedAt: new Date() },
   });
 
-  return { products: productCount, variants: variantCount, currencyCode };
+  return { products: productCount, currencyCode };
 }
 
 export async function syncSingleProduct(
@@ -287,25 +188,12 @@ export async function syncSingleProduct(
     return null;
   }
 
-  await loadRemainingVariants(admin, payload.data.product);
   return persistProduct(payload.data.product, payload.data.shop.currencyCode);
 }
 
 export async function markProductDeleted(shopifyId: string) {
-  const product = await prisma.shopifyProduct.findUnique({
+  await prisma.shopifyProduct.updateMany({
     where: { shopifyId },
-    select: { id: true },
+    data: { status: "DELETED", syncedAt: new Date() },
   });
-  if (!product) return;
-
-  await prisma.$transaction([
-    prisma.shopifyProduct.update({
-      where: { id: product.id },
-      data: { status: "DELETED", syncedAt: new Date() },
-    }),
-    prisma.shopifyVariant.updateMany({
-      where: { productId: product.id },
-      data: { active: false, syncedAt: new Date() },
-    }),
-  ]);
 }

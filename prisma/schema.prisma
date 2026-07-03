@@ -66,110 +66,112 @@ enum ScrapeTrigger {
   CRON
 }
 
-model ShopifyProduct {
-  id             String   @id @default(cuid())
-  shopifyId      String   @unique
-  title          String
-  vendor         String?
-  handle         String
-  productType    String?
-  categoryName   String?
-  onlineStoreUrl String?
-  status         String
-  syncedAt       DateTime @default(now())
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+enum RobotsAccessStatus {
+  UNKNOWN
+  ALLOWED
+  DISALLOWED
+}
 
-  variants ShopifyVariant[]
+model ShopifyProduct {
+  id                    String    @id @default(cuid())
+  shopifyId             String    @unique
+  title                 String
+  handle                String
+  vendor                String?
+  productType           String?
+  categoryName          String?
+  featuredImageUrl      String?
+  featuredImageAlt      String?
+  onlineStoreUrl        String?
+  status                String
+  firstVariantShopifyId String?
+  firstVariantTitle     String?
+  firstVariantSku       String?
+  price                 Decimal   @default(0) @db.Decimal(12, 2)
+  currencyCode          String    @default("EUR") @db.VarChar(3)
+  shopifyCreatedAt      DateTime?
+  shopifyUpdatedAt      DateTime?
+  syncedAt              DateTime  @default(now())
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  matches ProductMatch[]
 
   @@index([vendor])
   @@index([status])
-}
-
-model ShopifyVariant {
-  id              String   @id @default(cuid())
-  shopifyId       String   @unique
-  productId       String
-  title           String
-  sku             String?
-  barcode         String?
-  price           Decimal  @db.Decimal(12, 2)
-  currencyCode    String   @default("EUR") @db.VarChar(3)
-  selectedOptions Json?
-  active          Boolean  @default(true)
-  syncedAt        DateTime @default(now())
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  product ShopifyProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
-  matches ProductMatch[]
-
-  @@index([productId])
-  @@index([sku])
+  @@index([title])
 }
 
 model Competitor {
-  id                   String                @id @default(cuid())
-  name                 String                @unique
-  domain               String                @unique
-  active               Boolean               @default(true)
-  legalStatus          CompetitorLegalStatus @default(PENDING)
-  termsUrl             String?
-  permissionReference  String?
-  robotsCheckedAt      DateTime?
-  termsCheckedAt       DateTime?
-  renderMode           RenderMode            @default(HTTP)
-  priceSelector        String?
-  availabilitySelector String?
-  requestsPerMinute    Int                   @default(6)
-  createdAt            DateTime              @default(now())
-  updatedAt            DateTime              @updatedAt
+  id                      String                @id @default(cuid())
+  name                    String                @unique
+  domain                  String                @unique
+  active                  Boolean               @default(true)
+  legalStatus             CompetitorLegalStatus @default(PENDING)
+  termsUrl                String?
+  permissionReference     String?
+  robotsContent           String?
+  robotsAccess            RobotsAccessStatus    @default(UNKNOWN)
+  robotsOverrideConfirmed Boolean               @default(false)
+  robotsCheckedAt         DateTime?
+  termsCheckedAt          DateTime?
+  renderMode              RenderMode            @default(HTTP)
+  priceSelector           String?
+  availabilitySelector    String?
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
 
-  matches ProductMatch[]
+  matches      ProductMatch[]
+  observations PriceObservation[]
 
   @@index([active, legalStatus])
 }
 
 model ProductMatch {
-  id              String             @id @default(cuid())
-  variantId       String
-  competitorId    String
-  url             String
-  status          ProductMatchStatus @default(PENDING)
-  confidenceScore Int?
-  internalNote    String?
-  lastCheckedAt   DateTime?
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
+  id            String             @id @default(cuid())
+  productId     String
+  competitorId  String
+  url           String
+  status        ProductMatchStatus @default(PENDING)
+  lastScrapedAt DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
 
-  variant      ShopifyVariant     @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  product      ShopifyProduct     @relation(fields: [productId], references: [id], onDelete: Cascade)
   competitor   Competitor         @relation(fields: [competitorId], references: [id], onDelete: Restrict)
   observations PriceObservation[]
 
-  @@unique([variantId, url])
+  @@unique([productId, url])
   @@index([competitorId, status])
-  @@index([variantId, status])
+  @@index([productId, status])
+  @@index([lastScrapedAt])
 }
 
 model PriceObservation {
   id               String                 @id @default(cuid())
   matchId          String
+  competitorId     String
   scrapeRunId      String?
+  url              String
   price            Decimal?               @db.Decimal(12, 2)
   currencyCode     String?                @db.VarChar(3)
   availability     String?
   extractionMethod PriceExtractionMethod?
   httpStatus       Int?
+  durationMs       Int                    @default(0)
+  success          Boolean                @default(false)
   errorCode        String?
   errorMessage     String?
   sourceHash       String?
   observedAt       DateTime               @default(now())
   createdAt        DateTime               @default(now())
 
-  match     ProductMatch @relation(fields: [matchId], references: [id], onDelete: Cascade)
-  scrapeRun ScrapeRun?   @relation(fields: [scrapeRunId], references: [id], onDelete: SetNull)
+  match      ProductMatch @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  competitor Competitor   @relation(fields: [competitorId], references: [id], onDelete: Restrict)
+  scrapeRun  ScrapeRun?   @relation(fields: [scrapeRunId], references: [id], onDelete: SetNull)
 
   @@index([matchId, observedAt(sort: Desc)])
+  @@index([competitorId, observedAt(sort: Desc)])
   @@index([scrapeRunId])
 }
 
@@ -180,6 +182,7 @@ model ScrapeRun {
   total      Int             @default(0)
   succeeded  Int             @default(0)
   failed     Int             @default(0)
+  skipped    Int             @default(0)
   startedAt  DateTime        @default(now())
   finishedAt DateTime?
   createdAt  DateTime        @default(now())
