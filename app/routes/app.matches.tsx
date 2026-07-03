@@ -46,10 +46,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           where: { id: selectedProductId },
         })
       : null,
-    prisma.competitor.findMany({
-      where: { active: true },
-      orderBy: { name: "asc" },
-    }),
+    prisma.competitor.findMany({ orderBy: { name: "asc" } }),
     prisma.productMatch.findMany({
       where: {
         ...(status ? { status: status as ProductMatchStatus } : undefined),
@@ -101,12 +98,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     competitors,
     matches: matches.map((match) => ({
       id: match.id,
+      productId: match.product.id,
+      productShopifyId: match.product.shopifyId,
       product: match.product.title,
       vendor: match.product.vendor,
       imageUrl: match.product.featuredImageUrl,
       imageAlt: match.product.featuredImageAlt,
       shopifyPrice: match.product.price.toString(),
       currencyCode: match.product.currencyCode,
+      competitorId: match.competitor.id,
       competitor: match.competitor.name,
       url: match.url,
       status: match.status,
@@ -130,13 +130,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = String(formData.get("intent") || "");
 
   try {
-    if (intent === "create") {
+    if (intent === "create" || intent === "addCompetitor") {
       const productShopifyId = String(formData.get("productShopifyId") || "");
+      const productId = String(formData.get("productId") || "");
       const competitorId = String(formData.get("competitorId") || "");
       const [product, competitor] = await Promise.all([
-        prisma.shopifyProduct.findUnique({
-          where: { shopifyId: productShopifyId },
-        }),
+        intent === "create"
+          ? prisma.shopifyProduct.findUnique({
+              where: { shopifyId: productShopifyId },
+            })
+          : prisma.shopifyProduct.findUnique({ where: { id: productId } }),
         prisma.competitor.findUnique({ where: { id: competitorId } }),
       ]);
 
@@ -149,6 +152,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
       if (!competitor) {
         return { ok: false, message: "Concurrent introuvable." };
+      }
+      const existing = await prisma.productMatch.findFirst({
+        where: { productId: product.id, competitorId },
+      });
+      if (existing) {
+        return {
+          ok: false,
+          message:
+            "Ce concurrent est déjà renseigné pour ce produit. Modifiez sa ligne existante.",
+        };
       }
 
       const url = validateTargetUrl(
@@ -164,7 +177,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       });
       return {
         ok: true,
-        message: "Correspondance ajoutée. Validez-la avant le premier relevé.",
+        message:
+          intent === "create"
+            ? "Correspondance produit créée."
+            : "Concurrent ajouté à la correspondance.",
       };
     }
 
@@ -191,6 +207,59 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         data: { status: nextStatus },
       });
       return { ok: true, message: "Statut mis à jour." };
+    }
+
+    if (intent === "update") {
+      const statuses: ProductMatchStatus[] = [
+        "PENDING",
+        "VALIDATED",
+        "REJECTED",
+      ];
+      const status = String(formData.get("status")) as ProductMatchStatus;
+      const competitorId = String(formData.get("competitorId") || "");
+      if (!statuses.includes(status)) {
+        return { ok: false, message: "Statut invalide." };
+      }
+
+      const [match, competitor] = await Promise.all([
+        prisma.productMatch.findUnique({ where: { id } }),
+        prisma.competitor.findUnique({ where: { id: competitorId } }),
+      ]);
+      if (!match || !competitor) {
+        return {
+          ok: false,
+          message: "Correspondance ou concurrent introuvable.",
+        };
+      }
+      const duplicate = await prisma.productMatch.findFirst({
+        where: {
+          productId: match.productId,
+          competitorId,
+          id: { not: id },
+        },
+      });
+      if (duplicate) {
+        return {
+          ok: false,
+          message: "Ce concurrent est déjà renseigné pour ce produit.",
+        };
+      }
+      const url = validateTargetUrl(
+        String(formData.get("url") || ""),
+        competitor.domain,
+      ).toString();
+      const targetChanged =
+        match.competitorId !== competitorId || match.url !== url;
+      await prisma.productMatch.update({
+        where: { id },
+        data: {
+          competitorId,
+          url,
+          status,
+          ...(targetChanged ? { lastScrapedAt: null } : {}),
+        },
+      });
+      return { ok: true, message: "Ligne concurrente modifiée." };
     }
 
     if (intent === "scrape") {
@@ -251,6 +320,39 @@ export default function MatchesPage() {
           competitor.active && competitor.legalStatus === "APPROVED",
       ).length,
     [competitors],
+  );
+  const productGroups = useMemo(
+    () =>
+      matches.reduce<
+        Array<{
+          productId: string;
+          product: string;
+          vendor: string | null;
+          imageUrl: string | null;
+          imageAlt: string | null;
+          shopifyPrice: string;
+          currencyCode: string;
+          matches: typeof matches;
+        }>
+      >((groups, match) => {
+        let group = groups.find((item) => item.productId === match.productId);
+        if (!group) {
+          group = {
+            productId: match.productId,
+            product: match.product,
+            vendor: match.vendor,
+            imageUrl: match.imageUrl,
+            imageAlt: match.imageAlt,
+            shopifyPrice: match.shopifyPrice,
+            currencyCode: match.currencyCode,
+            matches: [],
+          };
+          groups.push(group);
+        }
+        group.matches.push(match);
+        return groups;
+      }, []),
+    [matches],
   );
 
   async function openProductPicker() {
@@ -368,152 +470,340 @@ export default function MatchesPage() {
         </Form>
       </s-section>
 
-      <s-section
-        heading="Correspondances enregistrées"
-        padding="none"
-        accessibilityLabel="Liste des correspondances concurrentes"
-      >
-        <s-table>
-          <Form method="get" slot="filters">
-            <s-grid
-              gap="small-200"
-              gridTemplateColumns="@container (inline-size > 600px) 1fr 220px auto"
+      <s-section heading="Correspondances enregistrées">
+        <Form method="get">
+          <s-grid
+            gap="small-200"
+            gridTemplateColumns="@container (inline-size > 600px) 1fr 220px auto"
+          >
+            <s-text-field
+              label="Rechercher"
+              labelAccessibilityVisibility="exclusive"
+              name="q"
+              value={filters.query}
+              icon="search"
+              placeholder="Produit, marque ou concurrent"
+            />
+            <s-select
+              label="Statut"
+              labelAccessibilityVisibility="exclusive"
+              name="status"
+              value={filters.status}
             >
-              <s-text-field
-                label="Rechercher"
-                labelAccessibilityVisibility="exclusive"
-                name="q"
-                value={filters.query}
-                icon="search"
-                placeholder="Produit, SKU ou concurrent"
-              />
-              <s-select
-                label="Statut"
-                labelAccessibilityVisibility="exclusive"
-                name="status"
-                value={filters.status}
-              >
-                <s-option value="">Tous les statuts</s-option>
-                <s-option value="PENDING">À vérifier</s-option>
-                <s-option value="VALIDATED">Validées</s-option>
-                <s-option value="REJECTED">Rejetées</s-option>
-              </s-select>
-              <s-button type="submit" variant="secondary" icon="search">
-                Filtrer
-              </s-button>
-            </s-grid>
-          </Form>
-
-          <s-table-header-row>
-            <s-table-header listSlot="primary">Produit</s-table-header>
-            <s-table-header>Concurrent</s-table-header>
-            <s-table-header>Dernier relevé</s-table-header>
-            <s-table-header listSlot="secondary">Statut</s-table-header>
-            <s-table-header>Actions</s-table-header>
-          </s-table-header-row>
-          <s-table-body>
-            {matches.map((match) => (
-              <s-table-row key={match.id}>
-                <s-table-cell>
-                  <s-stack gap="small-200">
-                    <s-text type="strong">{match.product}</s-text>
-                    <s-text color="subdued">
-                      {match.vendor || "Sans marque"} · {match.shopifyPrice}{" "}
-                      {match.currencyCode}
-                    </s-text>
-                    <s-link href={match.url} target="_blank">
-                      Ouvrir chez le concurrent
-                    </s-link>
-                  </s-stack>
-                </s-table-cell>
-                <s-table-cell>
-                  <s-stack gap="small-200">
-                    <s-text>{match.competitor}</s-text>
-                    <s-badge tone={LEGAL_STATUS_TONES[match.legalStatus]}>
-                      {LEGAL_STATUS_LABELS[match.legalStatus]}
-                    </s-badge>
-                  </s-stack>
-                </s-table-cell>
-                <s-table-cell>
-                  <s-stack gap="small-200">
-                    <s-text>
-                      {match.latest?.price
-                        ? `${match.latest.price} ${
-                            match.latest.currencyCode || ""
-                          }`
-                        : match.latest?.error || "Aucun relevé"}
-                    </s-text>
-                    {match.latest && (
-                      <s-text color="subdued">
-                        {new Date(match.latest.observedAt).toLocaleString(
-                          "fr-FR",
-                        )}
-                      </s-text>
-                    )}
-                  </s-stack>
-                </s-table-cell>
-                <s-table-cell>
-                  <s-badge tone={MATCH_STATUS_TONES[match.status]}>
-                    {MATCH_STATUS_LABELS[match.status]}
-                  </s-badge>
-                </s-table-cell>
-                <s-table-cell>
-                  <s-stack direction="inline" gap="small-200">
-                    {match.status !== "VALIDATED" && (
-                      <MatchAction
-                        id={match.id}
-                        intent="status"
-                        status="VALIDATED"
-                        label="Valider"
-                      />
-                    )}
-                    {match.status !== "REJECTED" && (
-                      <MatchAction
-                        id={match.id}
-                        intent="status"
-                        status="REJECTED"
-                        label="Rejeter"
-                      />
-                    )}
-                    {match.status !== "REJECTED" && (
-                      <MatchAction
-                        id={match.id}
-                        intent="scrape"
-                        label="Tester le relevé"
-                        icon="refresh"
-                        disabled={
-                          match.legalStatus !== "APPROVED" || !match.active
-                        }
-                      />
-                    )}
-                    <MatchAction
-                      id={match.id}
-                      intent="delete"
-                      label="Supprimer"
-                      tone="critical"
-                      icon="delete"
-                    />
-                  </s-stack>
-                </s-table-cell>
-              </s-table-row>
-            ))}
-            {!matches.length && (
-              <s-table-row>
-                <s-table-cell>
-                  <s-text color="subdued">
-                    Aucune correspondance pour ces filtres.
-                  </s-text>
-                </s-table-cell>
-                <s-table-cell>—</s-table-cell>
-                <s-table-cell>—</s-table-cell>
-                <s-table-cell>—</s-table-cell>
-                <s-table-cell>—</s-table-cell>
-              </s-table-row>
-            )}
-          </s-table-body>
-        </s-table>
+              <s-option value="">Tous les statuts</s-option>
+              <s-option value="PENDING">À vérifier</s-option>
+              <s-option value="VALIDATED">Validées</s-option>
+              <s-option value="REJECTED">Rejetées</s-option>
+            </s-select>
+            <s-button type="submit" variant="secondary" icon="search">
+              Filtrer
+            </s-button>
+          </s-grid>
+        </Form>
       </s-section>
+
+      {productGroups.map((group) => {
+        const addModalId = `add-competitor-${group.productId}`;
+        return (
+          <s-section key={group.productId} padding="none">
+            <s-box padding="base">
+              <s-stack
+                direction="inline"
+                gap="base"
+                alignItems="center"
+                justifyContent="space-between"
+              >
+                <s-stack direction="inline" gap="base" alignItems="center">
+                  {group.imageUrl ? (
+                    <s-thumbnail
+                      src={group.imageUrl}
+                      alt={group.imageAlt || group.product}
+                      size="small"
+                    />
+                  ) : (
+                    <s-avatar initials={group.product.slice(0, 2)} />
+                  )}
+                  <s-stack gap="small-200">
+                    <s-text type="strong">{group.product}</s-text>
+                    <s-text color="subdued">
+                      {group.vendor || "Sans marque"} · {group.shopifyPrice}{" "}
+                      {group.currencyCode} · {group.matches.length} concurrent(s)
+                    </s-text>
+                  </s-stack>
+                </s-stack>
+                <s-button
+                  variant="primary"
+                  icon="plus"
+                  commandFor={addModalId}
+                  command="--show"
+                >
+                  Ajouter un concurrent
+                </s-button>
+              </s-stack>
+            </s-box>
+
+            <s-table>
+              <s-table-header-row>
+                <s-table-header listSlot="primary">Concurrent</s-table-header>
+                <s-table-header>URL</s-table-header>
+                <s-table-header>Dernier relevé</s-table-header>
+                <s-table-header listSlot="secondary">Statut</s-table-header>
+                <s-table-header>Actions</s-table-header>
+              </s-table-header-row>
+              <s-table-body>
+                {group.matches.map((match) => {
+                  const editModalId = `edit-match-${match.id}`;
+                  return (
+                    <s-table-row key={match.id}>
+                      <s-table-cell>
+                        <s-stack gap="small-200">
+                          <s-text type="strong">{match.competitor}</s-text>
+                          <s-badge
+                            tone={LEGAL_STATUS_TONES[match.legalStatus]}
+                          >
+                            {LEGAL_STATUS_LABELS[match.legalStatus]}
+                          </s-badge>
+                        </s-stack>
+                      </s-table-cell>
+                      <s-table-cell>
+                        <s-link href={match.url} target="_blank">
+                          Ouvrir la page produit
+                        </s-link>
+                      </s-table-cell>
+                      <s-table-cell>
+                        <s-stack gap="small-200">
+                          <s-text>
+                            {match.latest?.price
+                              ? `${match.latest.price} ${
+                                  match.latest.currencyCode || ""
+                                }`
+                              : match.latest?.error || "Aucun relevé"}
+                          </s-text>
+                          {match.latest && (
+                            <s-text color="subdued">
+                              {new Date(
+                                match.latest.observedAt,
+                              ).toLocaleString("fr-FR")}
+                            </s-text>
+                          )}
+                        </s-stack>
+                      </s-table-cell>
+                      <s-table-cell>
+                        <s-badge tone={MATCH_STATUS_TONES[match.status]}>
+                          {MATCH_STATUS_LABELS[match.status]}
+                        </s-badge>
+                      </s-table-cell>
+                      <s-table-cell>
+                        <s-stack direction="inline" gap="small-200">
+                          <s-button
+                            variant="tertiary"
+                            icon="edit"
+                            commandFor={editModalId}
+                            command="--show"
+                          >
+                            Modifier
+                          </s-button>
+                          {match.status !== "VALIDATED" && (
+                            <MatchAction
+                              id={match.id}
+                              intent="status"
+                              status="VALIDATED"
+                              label="Valider"
+                            />
+                          )}
+                          {match.status !== "REJECTED" && (
+                            <MatchAction
+                              id={match.id}
+                              intent="scrape"
+                              label="Tester"
+                              icon="refresh"
+                              disabled={
+                                match.legalStatus !== "APPROVED" || !match.active
+                              }
+                            />
+                          )}
+                          <MatchAction
+                            id={match.id}
+                            intent="delete"
+                            label="Supprimer"
+                            tone="critical"
+                            icon="delete"
+                          />
+                        </s-stack>
+                        <EditMatchModal
+                          modalId={editModalId}
+                          match={match}
+                          competitors={competitors}
+                        />
+                      </s-table-cell>
+                    </s-table-row>
+                  );
+                })}
+              </s-table-body>
+            </s-table>
+            <AddCompetitorModal
+              modalId={addModalId}
+              productId={group.productId}
+              productName={group.product}
+              competitors={competitors}
+              usedCompetitorIds={group.matches.map(
+                (match) => match.competitorId,
+              )}
+            />
+          </s-section>
+        );
+      })}
+
+      {!productGroups.length && (
+        <s-section>
+          <s-stack gap="base" alignItems="center">
+            <s-icon type="product" tone="neutral" />
+            <s-text type="strong">Aucune correspondance</s-text>
+            <s-text color="subdued">
+              Ajoutez un produit et sa première URL concurrente.
+            </s-text>
+          </s-stack>
+        </s-section>
+      )}
     </s-page>
+  );
+}
+
+type MatchRow = ReturnType<
+  typeof useLoaderData<typeof loader>
+>["matches"][number];
+type CompetitorRow = ReturnType<
+  typeof useLoaderData<typeof loader>
+>["competitors"][number];
+
+function AddCompetitorModal({
+  modalId,
+  productId,
+  productName,
+  competitors,
+  usedCompetitorIds,
+}: {
+  modalId: string;
+  productId: string;
+  productName: string;
+  competitors: CompetitorRow[];
+  usedCompetitorIds: string[];
+}) {
+  const availableCompetitors = competitors.filter(
+    (competitor) => !usedCompetitorIds.includes(competitor.id),
+  );
+
+  return (
+    <s-modal
+      id={modalId}
+      heading={`Ajouter un concurrent à ${productName}`}
+      size="large"
+    >
+      {availableCompetitors.length ? (
+        <Form method="post">
+          <input type="hidden" name="intent" value="addCompetitor" />
+          <input type="hidden" name="productId" value={productId} />
+          <s-stack gap="base">
+            <s-select label="Concurrent" name="competitorId" required>
+              {availableCompetitors.map((competitor) => (
+                <s-option key={competitor.id} value={competitor.id}>
+                  {competitor.name}
+                  {!competitor.active ? " · Inactif" : ""}
+                </s-option>
+              ))}
+            </s-select>
+            <s-url-field
+              label="URL exacte de la page produit"
+              name="url"
+              required
+              placeholder="https://concurrent.fr/produit"
+            />
+            <s-stack direction="inline" justifyContent="end" gap="small">
+              <s-button type="button" commandFor={modalId} command="--hide">
+                Annuler
+              </s-button>
+              <s-button type="submit" variant="primary">
+                Ajouter
+              </s-button>
+            </s-stack>
+          </s-stack>
+        </Form>
+      ) : (
+        <s-stack gap="base">
+          <s-text color="subdued">
+            Tous les concurrents disponibles sont déjà renseignés pour ce
+            produit.
+          </s-text>
+          <s-stack direction="inline" justifyContent="end">
+            <s-button type="button" commandFor={modalId} command="--hide">
+              Fermer
+            </s-button>
+          </s-stack>
+        </s-stack>
+      )}
+    </s-modal>
+  );
+}
+
+function EditMatchModal({
+  modalId,
+  match,
+  competitors,
+}: {
+  modalId: string;
+  match: MatchRow;
+  competitors: CompetitorRow[];
+}) {
+  return (
+    <s-modal
+      id={modalId}
+      heading={`Modifier ${match.competitor}`}
+      size="large"
+    >
+      <Form method="post">
+        <input type="hidden" name="intent" value="update" />
+        <input type="hidden" name="id" value={match.id} />
+        <s-stack gap="base">
+          <s-select
+            label="Concurrent"
+            name="competitorId"
+            value={match.competitorId}
+            required
+          >
+            {competitors.map((competitor) => (
+              <s-option key={competitor.id} value={competitor.id}>
+                {competitor.name}
+                {!competitor.active ? " · Inactif" : ""}
+              </s-option>
+            ))}
+          </s-select>
+          <s-url-field
+            label="URL exacte de la page produit"
+            name="url"
+            value={match.url}
+            required
+          />
+          <s-select
+            label="Statut"
+            name="status"
+            value={match.status}
+            required
+          >
+            <s-option value="PENDING">À vérifier</s-option>
+            <s-option value="VALIDATED">Validée</s-option>
+            <s-option value="REJECTED">Rejetée</s-option>
+          </s-select>
+          <s-stack direction="inline" justifyContent="end" gap="small">
+            <s-button type="button" commandFor={modalId} command="--hide">
+              Annuler
+            </s-button>
+            <s-button type="submit" variant="primary">
+              Enregistrer
+            </s-button>
+          </s-stack>
+        </s-stack>
+      </Form>
+    </s-modal>
   );
 }
 
