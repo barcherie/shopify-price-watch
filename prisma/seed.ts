@@ -12,13 +12,10 @@ const competitors = [
 ];
 
 async function main() {
-  for (const competitor of competitors) {
-    await prisma.competitor.upsert({
-      where: { domain: competitor.domain },
-      update: { name: competitor.name },
-      create: competitor,
-    });
-  }
+  await prisma.competitor.createMany({
+    data: competitors,
+    skipDuplicates: true,
+  });
 }
 
 main()
