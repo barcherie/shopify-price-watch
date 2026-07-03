@@ -31,6 +31,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       ok: true,
       runId: run.id,
       succeeded: run.succeeded,
+      skipped: run.skipped,
       failed: run.failed,
     });
   } catch (error) {

@@ -15,10 +15,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const rows = await getBenchmarkRows();
   const header = [
     "Produit",
-    "Variante",
     "Marque",
     "Catégorie",
-    "SKU",
     "Prix Besançon",
     "Devise",
     "Meilleur prix concurrent",
@@ -26,6 +24,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     "Écart €",
     "Écart %",
     "Nombre de concurrents moins chers",
+    "Nombre de concurrents plus chers",
     "Correspondances validées",
     "Statut",
     "Dernier relevé",
@@ -34,10 +33,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const lines = rows.map((row) =>
     [
       row.productTitle,
-      row.variantTitle,
       row.vendor,
       row.category,
-      row.sku,
       row.shopifyPrice,
       row.currencyCode,
       row.bestCompetitorPrice,
@@ -45,6 +42,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       row.differenceAmount,
       row.differencePercent,
       row.cheaperCompetitors,
+      row.moreExpensiveCompetitors,
       row.matchCount,
       row.status,
       row.lastObservedAt,

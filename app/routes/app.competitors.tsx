@@ -5,6 +5,7 @@ import type { CompetitorLegalStatus, RenderMode } from "@prisma/client";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
+import { fetchRobotsTxt } from "../services/robots.server";
 
 const LEGAL_STATUS_LABELS = {
   PENDING: "À vérifier",
@@ -53,13 +54,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (intent === "create") {
       const name = String(formData.get("name") || "").trim();
       if (!name) return { ok: false, message: "Le nom est obligatoire." };
+      const domain = domainFromInput(formData.get("domain"));
+      const robots = await fetchRobotsTxt(domain);
       await prisma.competitor.create({
         data: {
           name,
-          domain: domainFromInput(formData.get("domain")),
+          domain,
+          robotsContent: robots.content,
+          robotsAccess: robots.access,
+          robotsCheckedAt: robots.checkedAt,
         },
       });
-      return { ok: true, message: "Concurrent ajouté." };
+      return {
+        ok: true,
+        message: "Concurrent ajouté et robots.txt vérifié.",
+      };
     }
 
     const id = String(formData.get("id") || "");
@@ -80,6 +89,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return { ok: true, message: "Concurrent supprimé." };
     }
 
+    if (intent === "robots") {
+      const competitor = await prisma.competitor.findUnique({ where: { id } });
+      if (!competitor) {
+        return { ok: false, message: "Concurrent introuvable." };
+      }
+      const robots = await fetchRobotsTxt(competitor.domain);
+      await prisma.competitor.update({
+        where: { id },
+        data: {
+          robotsContent: robots.content,
+          robotsAccess: robots.access,
+          robotsCheckedAt: robots.checkedAt,
+          robotsOverrideConfirmed: false,
+        },
+      });
+      return { ok: true, message: "robots.txt vérifié à nouveau." };
+    }
+
     if (intent === "update") {
       const legalStatuses: CompetitorLegalStatus[] = [
         "PENDING",
@@ -91,10 +118,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         formData.get("legalStatus"),
       ) as CompetitorLegalStatus;
       const renderMode = String(formData.get("renderMode")) as RenderMode;
-      const requestsPerMinute = Math.min(
-        30,
-        Math.max(1, Number(formData.get("requestsPerMinute") || 6)),
-      );
 
       if (!legalStatuses.includes(legalStatus)) {
         return { ok: false, message: "Statut juridique invalide." };
@@ -111,7 +134,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           active: formData.get("active") === "on",
           legalStatus,
           renderMode,
-          requestsPerMinute,
+          robotsOverrideConfirmed:
+            formData.get("robotsOverrideConfirmed") === "on",
           termsUrl: stringOrNull(formData.get("termsUrl")),
           permissionReference: stringOrNull(
             formData.get("permissionReference"),
@@ -197,6 +221,7 @@ export default function CompetitorsPage() {
             <s-table-header listSlot="primary">Concurrent</s-table-header>
             <s-table-header>Conformité</s-table-header>
             <s-table-header>Collecte</s-table-header>
+            <s-table-header>robots.txt</s-table-header>
             <s-table-header format="numeric">Correspondances</s-table-header>
             <s-table-header listSlot="secondary">État</s-table-header>
             <s-table-header>Actions</s-table-header>
@@ -223,16 +248,26 @@ export default function CompetitorsPage() {
                     </s-badge>
                   </s-table-cell>
                   <s-table-cell>
-                    <s-stack gap="small-200">
-                      <s-text>
-                        {competitor.renderMode === "HTTP"
-                          ? "HTML léger"
-                          : "Navigateur dynamique"}
-                      </s-text>
-                      <s-text color="subdued">
-                        {competitor.requestsPerMinute} req/min
-                      </s-text>
-                    </s-stack>
+                    {competitor.renderMode === "HTTP"
+                      ? "HTML léger"
+                      : "Navigateur dynamique"}
+                  </s-table-cell>
+                  <s-table-cell>
+                    <s-badge
+                      tone={
+                        competitor.robotsAccess === "ALLOWED"
+                          ? "success"
+                          : competitor.robotsAccess === "DISALLOWED"
+                            ? "critical"
+                            : "warning"
+                      }
+                    >
+                      {competitor.robotsAccess === "ALLOWED"
+                        ? "Autorisé"
+                        : competitor.robotsAccess === "DISALLOWED"
+                          ? "Interdit"
+                          : "Indéterminé"}
+                    </s-badge>
                   </s-table-cell>
                   <s-table-cell>{competitor._count.matches}</s-table-cell>
                   <s-table-cell>
@@ -250,6 +285,17 @@ export default function CompetitorsPage() {
                       >
                         Configurer
                       </s-button>
+                      <Form method="post">
+                        <input type="hidden" name="intent" value="robots" />
+                        <input type="hidden" name="id" value={competitor.id} />
+                        <s-button
+                          type="submit"
+                          variant="tertiary"
+                          icon="refresh"
+                        >
+                          robots.txt
+                        </s-button>
+                      </Form>
                       {!competitor._count.matches && (
                         <Form method="post">
                           <input type="hidden" name="intent" value="delete" />
@@ -336,13 +382,6 @@ function CompetitorModal({
               <s-option value="HTTP">HTML léger</s-option>
               <s-option value="BROWSER">Navigateur dynamique</s-option>
             </s-select>
-            <s-number-field
-              label="Requêtes par minute"
-              name="requestsPerMinute"
-              min={1}
-              max={30}
-              value={String(competitor.requestsPerMinute)}
-            />
             <s-url-field
               label="URL des conditions"
               name="termsUrl"
@@ -371,6 +410,24 @@ function CompetitorModal({
             name="active"
             value="on"
             defaultChecked={competitor.active}
+          />
+          {competitor.robotsAccess === "DISALLOWED" && (
+            <s-banner tone="critical" heading="Chemin potentiellement interdit">
+              La collecte automatique restera bloquée tant que vous n’aurez pas
+              confirmé explicitement l’exception ci-dessous.
+            </s-banner>
+          )}
+          <s-switch
+            label="Confirmer manuellement la collecte malgré robots.txt"
+            name="robotsOverrideConfirmed"
+            value="on"
+            defaultChecked={competitor.robotsOverrideConfirmed}
+          />
+          <s-text-area
+            label="Contenu de robots.txt"
+            value={competitor.robotsContent || "Non disponible"}
+            rows={8}
+            readOnly
           />
           <s-stack direction="inline" justifyContent="end" gap="small">
             <s-button type="button" commandFor={modalId} command="--hide">

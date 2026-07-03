@@ -4,13 +4,13 @@ Application Shopify interne de veille tarifaire pour Besançon Archerie.
 
 ## Fonctionnalités V1
 
-- synchronisation manuelle du catalogue Shopify et de ses variantes ;
+- synchronisation manuelle du catalogue Shopify, avec une ligne par produit ;
 - mise à jour par webhooks produits ;
-- gestion des concurrents et de leur statut de conformité ;
-- correspondances manuelles entre variantes Shopify et URLs concurrentes ;
+- gestion des concurrents, de leur statut de conformité et de leur `robots.txt` ;
+- correspondances manuelles entre produits Shopify et URLs concurrentes ;
 - extraction JSON-LD, microdonnées/meta, sélecteurs CSS et fallback prudent ;
 - rendu Chromium optionnel pour les pages dynamiques ;
-- historique des prix et erreurs ;
+- journal de chaque tentative de relevé ;
 - tableau de bord des écarts TTC hors livraison ;
 - export CSV compatible Excel français ;
 - lancement manuel, par route cron sécurisée ou par commande ;
@@ -98,6 +98,19 @@ npx prisma migrate deploy
 
 Le conteneur exécute automatiquement `prisma migrate deploy` avant de démarrer.
 
+La migration `20260703110000_product_centric_refactor` convertit l’ancien
+modèle centré sur les variantes vers un modèle centré sur les produits. Elle
+conserve la première variante de chaque produit comme prix de référence et
+rattache les correspondances existantes au produit.
+
+Pour chaque produit, l’application conserve notamment :
+
+- l’identifiant Shopify, le titre, la marque, le handle et le statut ;
+- l’image principale ;
+- l’identifiant, le titre et le SKU de la première variante ;
+- son prix et sa devise ;
+- les dates de création et de mise à jour Shopify.
+
 La seed initialise :
 
 - Star Archerie ;
@@ -109,6 +122,33 @@ La seed initialise :
 
 Tous les concurrents sont créés avec le statut juridique `PENDING`. Aucun
 relevé n’est possible avant le passage manuel à `APPROVED`.
+
+Lors de l’ajout d’un concurrent, l’application récupère et conserve son
+`robots.txt`. Son contenu et l’état détecté sont consultables dans la fiche du
+concurrent. Un chemin interdit bloque les relevés automatiques, sauf si une
+dérogation a été explicitement confirmée dans l’interface.
+
+## Correspondances et benchmark
+
+Le sélecteur Shopify permet de choisir un **produit**, et non une variante.
+Chaque correspondance contient uniquement le produit, le concurrent, l’URL et
+son statut :
+
+- `À vérifier` ;
+- `Validé` ;
+- `Rejeté`.
+
+Seules les correspondances validées apparaissent dans le benchmark. Les
+produits sans correspondance validée ne sont pas affichés.
+
+Le tableau de bord présente le prix Besançon, le meilleur prix concurrent, le
+concurrent le moins cher, les écarts en euros et en pourcentage, ainsi que le
+nombre de concurrents moins chers. Les statuts sont calculés ainsi :
+
+- `Top prix` : aucun concurrent moins cher ;
+- `Compétitif` : écart inférieur à 2 % ;
+- `À surveiller` : écart de 2 à 5 % ;
+- `À corriger` : écart supérieur à 5 %.
 
 ## Collecte des prix
 
@@ -129,12 +169,21 @@ L’application :
 - revalide chaque redirection ;
 - limite les réponses à 2 Mo ;
 - impose un timeout ;
-- effectue les relevés séquentiellement par concurrent ;
+- effectue au maximum une requête concurrente à la fois ;
+- attend un délai aléatoire de 2 à 5 secondes entre deux requêtes ;
+- utilise un user-agent identifiable contenant `SCRAPER_CONTACT_EMAIL` ;
+- ne relève pas deux fois la même URL dans une fenêtre de 24 heures ;
 - désactive automatiquement un concurrent après une réponse `403` ou `429` ;
 - ne contourne jamais CAPTCHA, connexion ou protection anti-bot.
 
-Les pages HTML ne sont pas conservées. Seuls le prix, la devise, la
-disponibilité, la méthode, les erreurs et une empreinte SHA-256 sont stockés.
+Un lancement manuel respecte également la fenêtre de 24 heures et indique les
+URLs ignorées. Le mode forcé est réservé au développement et est refusé en
+production.
+
+Les pages HTML ne sont pas conservées. Le journal enregistre pour chaque
+tentative la date, le concurrent, l’URL, le statut HTTP, la durée, le succès et
+l’erreur éventuelle. En cas de succès, le prix, la devise, la disponibilité, la
+méthode d’extraction et une empreinte SHA-256 sont également stockés.
 
 ## Cron Coolify
 
