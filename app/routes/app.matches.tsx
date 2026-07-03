@@ -75,12 +75,40 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       include: {
         competitor: true,
         product: true,
-        observations: { orderBy: { observedAt: "desc" }, take: 1 },
       },
       orderBy: { updatedAt: "desc" },
       take: 250,
     }),
   ]);
+  const matchIds = matches.map((match) => match.id);
+  const [latestSuccessfulPrices, latestAttempts] = await Promise.all([
+    prisma.priceObservation.findMany({
+      where: {
+        matchId: { in: matchIds },
+        success: true,
+        price: { not: null },
+      },
+      orderBy: { observedAt: "desc" },
+      distinct: ["matchId"],
+    }),
+    prisma.priceObservation.findMany({
+      where: { matchId: { in: matchIds } },
+      orderBy: { observedAt: "desc" },
+      distinct: ["matchId"],
+    }),
+  ]);
+  const priceByMatch = new Map(
+    latestSuccessfulPrices.map((observation) => [
+      observation.matchId,
+      observation,
+    ]),
+  );
+  const attemptByMatch = new Map(
+    latestAttempts.map((observation) => [
+      observation.matchId,
+      observation,
+    ]),
+  );
 
   return {
     filters: { query, status },
@@ -96,31 +124,42 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         }
       : null,
     competitors,
-    matches: matches.map((match) => ({
-      id: match.id,
-      productId: match.product.id,
-      productShopifyId: match.product.shopifyId,
-      product: match.product.title,
-      vendor: match.product.vendor,
-      imageUrl: match.product.featuredImageUrl,
-      imageAlt: match.product.featuredImageAlt,
-      shopifyPrice: match.product.price.toString(),
-      currencyCode: match.product.currencyCode,
-      competitorId: match.competitor.id,
-      competitor: match.competitor.name,
-      url: match.url,
-      status: match.status,
-      legalStatus: match.competitor.legalStatus,
-      active: match.competitor.active,
-      latest: match.observations[0]
-        ? {
-            price: match.observations[0].price?.toString() || null,
-            currencyCode: match.observations[0].currencyCode,
-            error: match.observations[0].errorMessage,
-            observedAt: match.observations[0].observedAt.toISOString(),
-          }
-        : null,
-    })),
+    matches: matches.map((match) => {
+      const latestPrice = priceByMatch.get(match.id);
+      const latestAttempt = attemptByMatch.get(match.id);
+      return {
+        id: match.id,
+        productId: match.product.id,
+        productShopifyId: match.product.shopifyId,
+        product: match.product.title,
+        vendor: match.product.vendor,
+        imageUrl: match.product.featuredImageUrl,
+        imageAlt: match.product.featuredImageAlt,
+        shopifyPrice: match.product.price.toString(),
+        currencyCode: match.product.currencyCode,
+        competitorId: match.competitor.id,
+        competitor: match.competitor.name,
+        url: match.url,
+        status: match.status,
+        legalStatus: match.competitor.legalStatus,
+        active: match.competitor.active,
+        latestPrice: latestPrice
+          ? {
+              price: latestPrice.price?.toString() || null,
+              currencyCode: latestPrice.currencyCode,
+              observedAt: latestPrice.observedAt.toISOString(),
+            }
+          : null,
+        latestAttempt: latestAttempt
+          ? {
+              success: latestAttempt.success,
+              errorCode: latestAttempt.errorCode,
+              error: latestAttempt.errorMessage,
+              observedAt: latestAttempt.observedAt.toISOString(),
+            }
+          : null,
+      };
+    }),
   };
 };
 
@@ -546,7 +585,8 @@ export default function MatchesPage() {
               <s-table-header-row>
                 <s-table-header listSlot="primary">Concurrent</s-table-header>
                 <s-table-header>URL</s-table-header>
-                <s-table-header>Dernier relevé</s-table-header>
+                <s-table-header>Dernier prix</s-table-header>
+                <s-table-header>Dernier test</s-table-header>
                 <s-table-header listSlot="secondary">Statut</s-table-header>
                 <s-table-header>Actions</s-table-header>
               </s-table-header-row>
@@ -573,20 +613,56 @@ export default function MatchesPage() {
                       <s-table-cell>
                         <s-stack gap="small-200">
                           <s-text>
-                            {match.latest?.price
-                              ? `${match.latest.price} ${
-                                  match.latest.currencyCode || ""
+                            {match.latestPrice?.price
+                              ? `${match.latestPrice.price} ${
+                                  match.latestPrice.currencyCode || ""
                                 }`
-                              : match.latest?.error || "Aucun relevé"}
+                              : "Aucun prix relevé"}
                           </s-text>
-                          {match.latest && (
+                          {match.latestPrice && (
                             <s-text color="subdued">
                               {new Date(
-                                match.latest.observedAt,
+                                match.latestPrice.observedAt,
                               ).toLocaleString("fr-FR")}
                             </s-text>
                           )}
                         </s-stack>
+                      </s-table-cell>
+                      <s-table-cell>
+                        {match.latestAttempt ? (
+                          <s-stack gap="small-200">
+                            <s-badge
+                              tone={
+                                match.latestAttempt.success
+                                  ? "success"
+                                  : match.latestAttempt.errorCode ===
+                                      "SKIPPED_24H"
+                                    ? "warning"
+                                    : "critical"
+                              }
+                            >
+                              {match.latestAttempt.success
+                                ? "Réussi"
+                                : match.latestAttempt.errorCode ===
+                                    "SKIPPED_24H"
+                                  ? "Déjà vérifié"
+                                  : "Erreur"}
+                            </s-badge>
+                            {!match.latestAttempt.success &&
+                              match.latestAttempt.error && (
+                                <s-text color="subdued">
+                                  {match.latestAttempt.error}
+                                </s-text>
+                              )}
+                            <s-text color="subdued">
+                              {new Date(
+                                match.latestAttempt.observedAt,
+                              ).toLocaleString("fr-FR")}
+                            </s-text>
+                          </s-stack>
+                        ) : (
+                          <s-text color="subdued">Jamais testé</s-text>
+                        )}
                       </s-table-cell>
                       <s-table-cell>
                         <s-badge tone={MATCH_STATUS_TONES[match.status]}>
