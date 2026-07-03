@@ -162,6 +162,20 @@ curl --fail --request POST \
 
 Un verrou PostgreSQL empêche deux exécutions simultanées.
 
+### Synchronisation catalogue sans navigateur
+
+Une session Shopify hors ligne étant créée à l’installation, le catalogue peut
+être synchronisé côté serveur :
+
+```bash
+curl --fail --request POST \
+  --header "Authorization: Bearer $CRON_SECRET" \
+  https://zixsw7530bseuso30tid1xpp.217.160.121.83.sslip.io/api/cron/sync-products
+```
+
+Cette route détecte automatiquement la boutique installée et reste protégée par
+le même secret que le cron de relevé.
+
 ### Commande
 
 ```bash
