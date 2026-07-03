@@ -17,7 +17,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
-ENV HOME=/tmp
+ENV HOME=/home/node
 
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
@@ -27,7 +27,7 @@ COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/scripts ./scripts
 COPY --from=build /app/app ./app
 
-RUN chown -R node:node /app
+RUN chown -R node:node /app /home/node
 USER node
 
 EXPOSE 3000
