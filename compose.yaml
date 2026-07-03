@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: pricewatch
+      POSTGRES_USER: pricewatch
+      POSTGRES_PASSWORD: pricewatch
+    ports:
+      - "5432:5432"
+    volumes:
+      - price-watch-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pricewatch -d pricewatch"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  price-watch-postgres:

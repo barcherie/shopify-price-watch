@@ -1,0 +1,192 @@
+.pw-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 12px;
+  margin-block: 16px;
+}
+
+.pw-metric {
+  border: 1px solid #d9d9d9;
+  border-radius: 12px;
+  padding: 14px;
+  background: #fff;
+}
+
+.pw-metric span,
+.pw-table small {
+  display: block;
+  color: #616161;
+  font-size: 12px;
+}
+
+.pw-metric strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 26px;
+}
+
+.pw-metric--success {
+  border-color: #8fd4a8;
+}
+
+.pw-metric--info {
+  border-color: #91c6e8;
+}
+
+.pw-metric--warning {
+  border-color: #e8c979;
+}
+
+.pw-metric--critical {
+  border-color: #e7a2a2;
+}
+
+.pw-filters,
+.pw-form-grid {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.pw-filters label,
+.pw-form-grid label {
+  display: grid;
+  gap: 5px;
+  min-width: 150px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pw-filters select,
+.pw-form-grid select,
+.pw-form-grid input,
+.pw-form-grid textarea {
+  min-height: 36px;
+  border: 1px solid #b5b5b5;
+  border-radius: 8px;
+  padding: 7px 9px;
+  background: white;
+}
+
+.pw-form-grid textarea {
+  min-height: 70px;
+}
+
+.pw-checkbox {
+  display: flex !important;
+  flex-direction: row;
+  align-items: center;
+  min-height: 36px;
+}
+
+.pw-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 13px;
+  background: #303030;
+  color: white;
+  cursor: pointer;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.pw-button--secondary {
+  background: #e8e8e8;
+  color: #303030;
+}
+
+.pw-button--danger {
+  background: #b42318;
+}
+
+.pw-table-wrap {
+  overflow-x: auto;
+}
+
+.pw-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.pw-table th,
+.pw-table td {
+  border-bottom: 1px solid #e3e3e3;
+  padding: 11px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.pw-table th {
+  background: #f7f7f7;
+  color: #4a4a4a;
+  white-space: nowrap;
+}
+
+.pw-table form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pw-table input,
+.pw-table select {
+  min-height: 32px;
+  max-width: 180px;
+  border: 1px solid #b5b5b5;
+  border-radius: 6px;
+  padding: 5px 7px;
+}
+
+.pw-status {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: #ededed;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.pw-status--TOP_PRICE,
+.pw-status--APPROVED,
+.pw-status--VALIDATED {
+  background: #d8f3df;
+  color: #14532d;
+}
+
+.pw-status--COMPETITIVE {
+  background: #dbeafe;
+  color: #1e3a8a;
+}
+
+.pw-status--WATCH,
+.pw-status--PENDING {
+  background: #fef3c7;
+  color: #78350f;
+}
+
+.pw-status--FIX,
+.pw-status--BLOCKED,
+.pw-status--REJECTED {
+  background: #fee2e2;
+  color: #7f1d1d;
+}
+
+.pw-empty {
+  padding: 28px !important;
+  text-align: center !important;
+  color: #616161;
+}
+
+.pw-help {
+  border-left: 3px solid #91c6e8;
+  padding: 10px 12px;
+  background: #f2f8fc;
+  margin-bottom: 16px;
+}
