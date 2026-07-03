@@ -27,7 +27,7 @@ COPY --from=build /app/prisma ./prisma
 COPY --from=build /app/scripts ./scripts
 COPY --from=build /app/app ./app
 
-RUN chown -R node:node /app /home/node
+RUN npx prisma generate && chown -R node:node /app /home/node
 USER node
 
 EXPOSE 3000
