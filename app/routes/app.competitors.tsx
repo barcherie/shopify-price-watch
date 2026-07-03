@@ -1,8 +1,22 @@
+import { useEffect } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData } from "react-router";
 import type { CompetitorLegalStatus, RenderMode } from "@prisma/client";
+import { useAppBridge } from "@shopify/app-bridge-react";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
+
+const LEGAL_STATUS_LABELS = {
+  PENDING: "À vérifier",
+  APPROVED: "Approuvé",
+  BLOCKED: "Bloqué",
+} as const;
+
+const LEGAL_STATUS_TONES = {
+  PENDING: "warning",
+  APPROVED: "success",
+  BLOCKED: "critical",
+} as const;
 
 function domainFromInput(raw: FormDataEntryValue | null) {
   const value = String(raw || "")
@@ -127,141 +141,247 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 export default function CompetitorsPage() {
   const { competitors } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
+  const shopify = useAppBridge();
+
+  useEffect(() => {
+    if (actionData?.message) {
+      shopify.toast.show(actionData.message, { isError: !actionData.ok });
+    }
+  }, [actionData, shopify]);
 
   return (
     <s-page heading="Concurrents">
       <s-section heading="Ajouter un concurrent">
-        {actionData?.message && <p className="pw-help">{actionData.message}</p>}
-        <Form method="post" className="pw-form-grid">
+        <Form method="post">
           <input type="hidden" name="intent" value="create" />
-          <label>
-            Nom
-            <input name="name" required placeholder="Bourgogne Archerie" />
-          </label>
-          <label>
-            Domaine
-            <input name="domain" required placeholder="bourgognearcherie.com" />
-          </label>
-          <button type="submit" className="pw-button">
-            Ajouter
-          </button>
+          <s-grid
+            gap="base"
+            gridTemplateColumns="@container (inline-size > 650px) 1fr 1fr auto"
+            alignItems="end"
+          >
+            <s-text-field
+              label="Nom"
+              name="name"
+              required
+              placeholder="Bourgogne Archerie"
+            />
+            <s-text-field
+              label="Domaine"
+              name="domain"
+              required
+              prefix="https://"
+              placeholder="bourgognearcherie.com"
+            />
+            <s-button type="submit" variant="primary" icon="plus">
+              Ajouter
+            </s-button>
+          </s-grid>
         </Form>
       </s-section>
 
-      <s-section heading="Configuration et conformité">
-        <p className="pw-help">
+      <s-section>
+        <s-banner tone="info" heading="Collecte désactivée par défaut">
           Aucun relevé automatique n’est effectué tant que le statut juridique
-          n’est pas « Approuvé ». Conservez ici la preuve ou la référence de
-          votre validation.
-        </p>
-        {competitors.map((competitor) => (
-          <details key={competitor.id}>
-            <summary>
-              <strong>{competitor.name}</strong> — {competitor.domain}{" "}
-              <span
-                className={`pw-status pw-status--${competitor.legalStatus}`}
-              >
-                {competitor.legalStatus}
-              </span>{" "}
-              ({competitor._count.matches} correspondances)
-            </summary>
-            <Form method="post" className="pw-form-grid">
-              <input type="hidden" name="intent" value="update" />
-              <input type="hidden" name="id" value={competitor.id} />
-              <label>
-                Nom
-                <input name="name" defaultValue={competitor.name} required />
-              </label>
-              <label>
-                Domaine
-                <input
-                  name="domain"
-                  defaultValue={competitor.domain}
-                  required
-                />
-              </label>
-              <label>
-                Conformité
-                <select
-                  name="legalStatus"
-                  defaultValue={competitor.legalStatus}
-                >
-                  <option value="PENDING">À vérifier</option>
-                  <option value="APPROVED">Approuvé</option>
-                  <option value="BLOCKED">Bloqué</option>
-                </select>
-              </label>
-              <label>
-                Mode
-                <select name="renderMode" defaultValue={competitor.renderMode}>
-                  <option value="HTTP">HTML léger</option>
-                  <option value="BROWSER">Navigateur dynamique</option>
-                </select>
-              </label>
-              <label>
-                Requêtes/minute
-                <input
-                  name="requestsPerMinute"
-                  type="number"
-                  min="1"
-                  max="30"
-                  defaultValue={competitor.requestsPerMinute}
-                />
-              </label>
-              <label>
-                URL des conditions
-                <input
-                  name="termsUrl"
-                  type="url"
-                  defaultValue={competitor.termsUrl || ""}
-                />
-              </label>
-              <label>
-                Preuve / note juridique
-                <textarea
-                  name="permissionReference"
-                  defaultValue={competitor.permissionReference || ""}
-                />
-              </label>
-              <label>
-                Sélecteur CSS prix
-                <input
-                  name="priceSelector"
-                  defaultValue={competitor.priceSelector || ""}
-                  placeholder='.product-price [itemprop="price"]'
-                />
-              </label>
-              <label>
-                Sélecteur disponibilité
-                <input
-                  name="availabilitySelector"
-                  defaultValue={competitor.availabilitySelector || ""}
-                />
-              </label>
-              <label className="pw-checkbox">
-                <input
-                  name="active"
-                  type="checkbox"
-                  defaultChecked={competitor.active}
-                />
-                Actif
-              </label>
-              <button type="submit" className="pw-button">
-                Enregistrer
-              </button>
-            </Form>
-            {!competitor._count.matches && (
-              <Form method="post">
-                <input type="hidden" name="intent" value="delete" />
-                <input type="hidden" name="id" value={competitor.id} />
-                <button type="submit" className="pw-button pw-button--danger">
-                  Supprimer
-                </button>
-              </Form>
-            )}
-          </details>
-        ))}
+          n’est pas « Approuvé ». Conservez une référence de votre vérification
+          dans la fiche du concurrent.
+        </s-banner>
+      </s-section>
+
+      <s-section
+        heading="Configuration et conformité"
+        padding="none"
+        accessibilityLabel="Liste des concurrents"
+      >
+        <s-table>
+          <s-table-header-row>
+            <s-table-header listSlot="primary">Concurrent</s-table-header>
+            <s-table-header>Conformité</s-table-header>
+            <s-table-header>Collecte</s-table-header>
+            <s-table-header format="numeric">Correspondances</s-table-header>
+            <s-table-header listSlot="secondary">État</s-table-header>
+            <s-table-header>Actions</s-table-header>
+          </s-table-header-row>
+          <s-table-body>
+            {competitors.map((competitor) => {
+              const modalId = `competitor-${competitor.id}`;
+              return (
+                <s-table-row key={competitor.id}>
+                  <s-table-cell>
+                    <s-stack gap="small-200">
+                      <s-text type="strong">{competitor.name}</s-text>
+                      <s-link
+                        href={`https://${competitor.domain}`}
+                        target="_blank"
+                      >
+                        {competitor.domain}
+                      </s-link>
+                    </s-stack>
+                  </s-table-cell>
+                  <s-table-cell>
+                    <s-badge tone={LEGAL_STATUS_TONES[competitor.legalStatus]}>
+                      {LEGAL_STATUS_LABELS[competitor.legalStatus]}
+                    </s-badge>
+                  </s-table-cell>
+                  <s-table-cell>
+                    <s-stack gap="small-200">
+                      <s-text>
+                        {competitor.renderMode === "HTTP"
+                          ? "HTML léger"
+                          : "Navigateur dynamique"}
+                      </s-text>
+                      <s-text color="subdued">
+                        {competitor.requestsPerMinute} req/min
+                      </s-text>
+                    </s-stack>
+                  </s-table-cell>
+                  <s-table-cell>{competitor._count.matches}</s-table-cell>
+                  <s-table-cell>
+                    <s-badge tone={competitor.active ? "success" : "neutral"}>
+                      {competitor.active ? "Actif" : "Inactif"}
+                    </s-badge>
+                  </s-table-cell>
+                  <s-table-cell>
+                    <s-stack direction="inline" gap="small-200">
+                      <s-button
+                        variant="tertiary"
+                        icon="edit"
+                        commandFor={modalId}
+                        command="--show"
+                      >
+                        Configurer
+                      </s-button>
+                      {!competitor._count.matches && (
+                        <Form method="post">
+                          <input type="hidden" name="intent" value="delete" />
+                          <input
+                            type="hidden"
+                            name="id"
+                            value={competitor.id}
+                          />
+                          <s-button
+                            type="submit"
+                            variant="tertiary"
+                            tone="critical"
+                            icon="delete"
+                          >
+                            Supprimer
+                          </s-button>
+                        </Form>
+                      )}
+                    </s-stack>
+                    <CompetitorModal
+                      modalId={modalId}
+                      competitor={competitor}
+                    />
+                  </s-table-cell>
+                </s-table-row>
+              );
+            })}
+          </s-table-body>
+        </s-table>
       </s-section>
     </s-page>
+  );
+}
+
+function CompetitorModal({
+  modalId,
+  competitor,
+}: {
+  modalId: string;
+  competitor: ReturnType<
+    typeof useLoaderData<typeof loader>
+  >["competitors"][number];
+}) {
+  return (
+    <s-modal
+      id={modalId}
+      heading={`Configurer ${competitor.name}`}
+      size="large"
+    >
+      <Form method="post">
+        <input type="hidden" name="intent" value="update" />
+        <input type="hidden" name="id" value={competitor.id} />
+        <s-stack gap="base">
+          <s-grid
+            gap="base"
+            gridTemplateColumns="@container (inline-size > 600px) 1fr 1fr"
+          >
+            <s-text-field
+              label="Nom"
+              name="name"
+              value={competitor.name}
+              required
+            />
+            <s-text-field
+              label="Domaine"
+              name="domain"
+              value={competitor.domain}
+              required
+            />
+            <s-select
+              label="Conformité"
+              name="legalStatus"
+              value={competitor.legalStatus}
+            >
+              <s-option value="PENDING">À vérifier</s-option>
+              <s-option value="APPROVED">Approuvé</s-option>
+              <s-option value="BLOCKED">Bloqué</s-option>
+            </s-select>
+            <s-select
+              label="Mode de rendu"
+              name="renderMode"
+              value={competitor.renderMode}
+            >
+              <s-option value="HTTP">HTML léger</s-option>
+              <s-option value="BROWSER">Navigateur dynamique</s-option>
+            </s-select>
+            <s-number-field
+              label="Requêtes par minute"
+              name="requestsPerMinute"
+              min={1}
+              max={30}
+              value={String(competitor.requestsPerMinute)}
+            />
+            <s-url-field
+              label="URL des conditions"
+              name="termsUrl"
+              value={competitor.termsUrl || ""}
+            />
+            <s-text-field
+              label="Sélecteur CSS du prix"
+              name="priceSelector"
+              value={competitor.priceSelector || ""}
+              placeholder='.product-price [itemprop="price"]'
+            />
+            <s-text-field
+              label="Sélecteur de disponibilité"
+              name="availabilitySelector"
+              value={competitor.availabilitySelector || ""}
+            />
+          </s-grid>
+          <s-text-area
+            label="Preuve ou note juridique"
+            name="permissionReference"
+            value={competitor.permissionReference || ""}
+            rows={4}
+          />
+          <s-switch
+            label="Concurrent actif"
+            name="active"
+            value="on"
+            defaultChecked={competitor.active}
+          />
+          <s-stack direction="inline" justifyContent="end" gap="small">
+            <s-button type="button" commandFor={modalId} command="--hide">
+              Annuler
+            </s-button>
+            <s-button type="submit" variant="primary">
+              Enregistrer
+            </s-button>
+          </s-stack>
+        </s-stack>
+      </Form>
+    </s-modal>
   );
 }

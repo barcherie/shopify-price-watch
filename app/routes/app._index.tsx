@@ -22,6 +22,13 @@ const STATUS_LABELS = {
   FIX: "À corriger",
 } as const;
 
+const STATUS_TONES = {
+  TOP_PRICE: "success",
+  COMPETITIVE: "info",
+  WATCH: "warning",
+  FIX: "critical",
+} as const;
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
   const url = new URL(request.url);
@@ -128,116 +135,134 @@ export default function Dashboard() {
         </s-button>
       </s-stack>
 
-      <div className="pw-metrics">
+      <s-grid
+        gap="base"
+        gridTemplateColumns="@container (inline-size > 900px) repeat(6, 1fr), @container (inline-size > 500px) repeat(3, 1fr), 1fr"
+      >
         <Metric label="Variantes" value={summary.products} />
         <Metric label="Top prix" value={summary.topPrice} tone="success" />
         <Metric label="Compétitifs" value={summary.competitive} tone="info" />
         <Metric label="À surveiller" value={summary.watch} tone="warning" />
         <Metric label="À corriger" value={summary.fix} tone="critical" />
         <Metric label="Sans correspondance" value={summary.unmatched} />
-      </div>
+      </s-grid>
 
-      <s-section heading="Benchmark TTC hors livraison">
-        <Form method="get" className="pw-filters">
-          <label>
-            Marque
-            <select name="vendor" defaultValue={filters.vendor}>
-              <option value="">Toutes</option>
-              {vendors.map((vendor) => (
-                <option key={vendor} value={vendor}>
-                  {vendor}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Statut
-            <select name="status" defaultValue={filters.status}>
-              <option value="">Tous</option>
-              {Object.entries(STATUS_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="pw-checkbox">
-            <input
-              type="checkbox"
-              name="unmatched"
-              value="1"
-              defaultChecked={filters.unmatched}
-            />
-            Sans correspondance
-          </label>
-          <button className="pw-button" type="submit">
-            Filtrer
-          </button>
-          <a className="pw-button pw-button--secondary" href="/app/export">
-            Export CSV
-          </a>
-        </Form>
+      <s-section
+        heading="Benchmark TTC hors livraison"
+        padding="none"
+        accessibilityLabel="Benchmark des prix"
+      >
+        <s-table>
+          <Form method="get" slot="filters">
+            <s-grid
+              gap="small-200"
+              gridTemplateColumns="@container (inline-size > 750px) 1fr 220px auto auto auto"
+              alignItems="end"
+            >
+              <s-select label="Marque" name="vendor" value={filters.vendor}>
+                <s-option value="">Toutes les marques</s-option>
+                {vendors.map((vendor) => (
+                  <s-option key={vendor} value={vendor}>
+                    {vendor}
+                  </s-option>
+                ))}
+              </s-select>
+              <s-select label="Statut" name="status" value={filters.status}>
+                <s-option value="">Tous les statuts</s-option>
+                {Object.entries(STATUS_LABELS).map(([value, label]) => (
+                  <s-option key={value} value={value}>
+                    {label}
+                  </s-option>
+                ))}
+              </s-select>
+              <s-switch
+                label="Sans correspondance"
+                name="unmatched"
+                value="1"
+                defaultChecked={filters.unmatched}
+              />
+              <s-button type="submit" variant="secondary" icon="filter">
+                Filtrer
+              </s-button>
+              <s-button href="/app/export" variant="secondary" icon="export">
+                Export CSV
+              </s-button>
+            </s-grid>
+          </Form>
 
-        <div className="pw-table-wrap">
-          <table className="pw-table">
-            <thead>
-              <tr>
-                <th>Produit</th>
-                <th>SKU</th>
-                <th>Prix Besançon</th>
-                <th>Meilleur concurrent</th>
-                <th>Écart</th>
-                <th>Moins chers</th>
-                <th>Statut</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.variantId}>
-                  <td>
-                    <strong>{row.productTitle}</strong>
+          <s-table-header-row>
+            <s-table-header listSlot="primary">Produit</s-table-header>
+            <s-table-header>SKU</s-table-header>
+            <s-table-header format="currency">Prix Besançon</s-table-header>
+            <s-table-header format="currency">
+              Meilleur concurrent
+            </s-table-header>
+            <s-table-header>Écart</s-table-header>
+            <s-table-header format="numeric">Moins chers</s-table-header>
+            <s-table-header listSlot="secondary">Statut</s-table-header>
+          </s-table-header-row>
+          <s-table-body>
+            {rows.map((row) => (
+              <s-table-row key={row.variantId}>
+                <s-table-cell>
+                  <s-stack gap="small-200">
+                    <s-text type="strong">{row.productTitle}</s-text>
                     {row.variantTitle !== "Default Title" && (
-                      <small>{row.variantTitle}</small>
+                      <s-text color="subdued">{row.variantTitle}</s-text>
                     )}
-                  </td>
-                  <td>{row.sku || "—"}</td>
-                  <td>{money(row.shopifyPrice, row.currencyCode)}</td>
-                  <td>
-                    {row.bestCompetitorPrice === null ? (
-                      <a href={`/app/matches?variant=${row.variantId}`}>
-                        Ajouter une correspondance
-                      </a>
-                    ) : (
-                      <>
+                  </s-stack>
+                </s-table-cell>
+                <s-table-cell>{row.sku || "—"}</s-table-cell>
+                <s-table-cell>
+                  {money(row.shopifyPrice, row.currencyCode)}
+                </s-table-cell>
+                <s-table-cell>
+                  {row.bestCompetitorPrice === null ? (
+                    <s-link href={`/app/matches?variant=${row.variantId}`}>
+                      Ajouter une correspondance
+                    </s-link>
+                  ) : (
+                    <s-stack gap="small-200">
+                      <s-text>
                         {money(row.bestCompetitorPrice, row.currencyCode)}
-                        <small>{row.bestCompetitorName}</small>
-                      </>
-                    )}
-                  </td>
-                  <td>
-                    {row.differenceAmount === null
-                      ? "—"
-                      : `${money(row.differenceAmount, row.currencyCode)} (${row.differencePercent?.toFixed(1)} %)`}
-                  </td>
-                  <td>{row.cheaperCompetitors}</td>
-                  <td>
-                    <span className={`pw-status pw-status--${row.status}`}>
-                      {STATUS_LABELS[row.status]}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-              {!rows.length && (
-                <tr>
-                  <td colSpan={7} className="pw-empty">
-                    Aucun produit pour ces filtres. Lancez d’abord une
-                    synchronisation Shopify.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+                      </s-text>
+                      <s-text color="subdued">{row.bestCompetitorName}</s-text>
+                    </s-stack>
+                  )}
+                </s-table-cell>
+                <s-table-cell>
+                  {row.differenceAmount === null
+                    ? "—"
+                    : `${money(
+                        row.differenceAmount,
+                        row.currencyCode,
+                      )} (${row.differencePercent?.toFixed(1)} %)`}
+                </s-table-cell>
+                <s-table-cell>{row.cheaperCompetitors}</s-table-cell>
+                <s-table-cell>
+                  <s-badge tone={STATUS_TONES[row.status]}>
+                    {STATUS_LABELS[row.status]}
+                  </s-badge>
+                </s-table-cell>
+              </s-table-row>
+            ))}
+            {!rows.length && (
+              <s-table-row>
+                <s-table-cell>
+                  <s-text color="subdued">
+                    Aucun produit pour ces filtres.
+                  </s-text>
+                </s-table-cell>
+                <s-table-cell>—</s-table-cell>
+                <s-table-cell>—</s-table-cell>
+                <s-table-cell>—</s-table-cell>
+                <s-table-cell>—</s-table-cell>
+                <s-table-cell>—</s-table-cell>
+                <s-table-cell>—</s-table-cell>
+              </s-table-row>
+            )}
+          </s-table-body>
+        </s-table>
       </s-section>
     </s-page>
   );
@@ -250,13 +275,18 @@ function Metric({
 }: {
   label: string;
   value: number;
-  tone?: string;
+  tone?: "neutral" | "success" | "info" | "warning" | "critical";
 }) {
   return (
-    <div className={`pw-metric pw-metric--${tone}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
+    <s-box border="base" borderRadius="base" padding="base">
+      <s-stack gap="small-200">
+        <s-text color="subdued">{label}</s-text>
+        <s-stack direction="inline" alignItems="center" gap="small-200">
+          <s-text type="strong">{value.toLocaleString("fr-FR")}</s-text>
+          {tone !== "neutral" && <s-badge tone={tone}>{label}</s-badge>}
+        </s-stack>
+      </s-stack>
+    </s-box>
   );
 }
 
