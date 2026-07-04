@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isScrapeDue, SCRAPE_COOLDOWN_MS } from "./scrape-runner.server";
+import {
+  DAY_MS,
+  isScrapeDue,
+  SCRAPE_COOLDOWN_MS,
+} from "./scrape-runner.server";
 
 describe("isScrapeDue", () => {
   const now = new Date("2026-07-03T12:00:00Z");
@@ -16,5 +20,24 @@ describe("isScrapeDue", () => {
 
   it("autorise le mode force en développement", () => {
     expect(isScrapeDue(new Date(now.getTime() - 60_000), now, true)).toBe(true);
+  });
+
+  it("respecte une fréquence automatique de cinq jours", () => {
+    expect(
+      isScrapeDue(
+        new Date(now.getTime() - 4 * DAY_MS),
+        now,
+        false,
+        5 * DAY_MS,
+      ),
+    ).toBe(false);
+    expect(
+      isScrapeDue(
+        new Date(now.getTime() - 5 * DAY_MS),
+        now,
+        false,
+        5 * DAY_MS,
+      ),
+    ).toBe(true);
   });
 });

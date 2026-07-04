@@ -138,6 +138,12 @@ son statut :
 - `Validé` ;
 - `Rejeté`.
 
+Le bouton de recherche automatique consulte les sitemaps publics des
+concurrents actifs et approuvés. Le SKU est prioritaire, puis la marque et le
+titre servent à classer les URLs candidates. Toutes les propositions restent
+au statut `À vérifier` et doivent être contrôlées humainement. Aucun moteur de
+recherche externe n’est scrapé.
+
 Seules les correspondances validées apparaissent dans le benchmark. Les
 produits sans correspondance validée ne sont pas affichés.
 
@@ -172,11 +178,12 @@ L’application :
 - effectue au maximum une requête concurrente à la fois ;
 - attend un délai aléatoire de 2 à 5 secondes entre deux requêtes ;
 - utilise un user-agent identifiable contenant `SCRAPER_CONTACT_EMAIL` ;
-- ne relève pas deux fois la même URL dans une fenêtre de 24 heures ;
+- ne relève pas automatiquement deux fois la même URL avant la fréquence
+  configurée, 5 jours par défaut ;
 - désactive automatiquement un concurrent après une réponse `403` ou `429` ;
 - ne contourne jamais CAPTCHA, connexion ou protection anti-bot.
 
-Un lancement manuel respecte également la fenêtre de 24 heures et indique les
+Un test manuel conserve une fenêtre de sécurité de 24 heures et indique les
 URLs ignorées. Le mode forcé est réservé au développement et est refusé en
 production.
 
@@ -186,6 +193,26 @@ l’erreur éventuelle. En cas de succès, le prix, la devise, la disponibilité
 méthode d’extraction et une empreinte SHA-256 sont également stockés.
 
 ## Cron Coolify
+
+La page **Automatisation** permet d’activer ou désactiver la collecte, de régler
+une fréquence de 1 à 30 jours, de consulter la prochaine échéance et
+l’historique des lancements.
+
+Configurer dans Coolify une tâche planifiée qui exécute chaque heure :
+
+```cron
+0 * * * *
+```
+
+avec la commande :
+
+```bash
+npm run scrape
+```
+
+Cette vérification horaire effectue seulement une requête en base. Le crawl
+n’est lancé que lorsque `nextRunAt` est atteint. La fréquence peut ainsi être
+modifiée depuis Shopify sans reconfigurer Coolify.
 
 ### Route HTTP
 
@@ -209,7 +236,8 @@ curl --fail --request POST \
   https://zixsw7530bseuso30tid1xpp.217.160.121.83.sslip.io/api/cron/scrape
 ```
 
-Un verrou PostgreSQL empêche deux exécutions simultanées.
+La route applique elle aussi les réglages de la page Automatisation. Un verrou
+PostgreSQL empêche deux exécutions simultanées.
 
 ### Synchronisation catalogue sans navigateur
 

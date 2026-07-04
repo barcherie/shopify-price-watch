@@ -8,7 +8,8 @@ import { UnsafeUrlError } from "./url-safety.server";
 
 const LOCK_ID = "price-watch-scrape";
 const LOCK_DURATION_MS = 30 * 60 * 1000;
-export const SCRAPE_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+export const DAY_MS = 24 * 60 * 60 * 1000;
+export const SCRAPE_COOLDOWN_MS = DAY_MS;
 
 export class ScrapeAlreadyRunningError extends Error {}
 
@@ -16,11 +17,12 @@ export function isScrapeDue(
   lastScrapedAt: Date | null,
   now = new Date(),
   force = false,
+  cooldownMs = SCRAPE_COOLDOWN_MS,
 ) {
   return (
     force ||
     !lastScrapedAt ||
-    now.getTime() - lastScrapedAt.getTime() >= SCRAPE_COOLDOWN_MS
+    now.getTime() - lastScrapedAt.getTime() >= cooldownMs
   );
 }
 
@@ -79,8 +81,10 @@ export async function runPriceWatch(options: {
   matchId?: string;
   force?: boolean;
   testPendingMatch?: boolean;
+  cooldownMs?: number;
 }) {
   const force = options.force === true;
+  const cooldownMs = options.cooldownMs ?? SCRAPE_COOLDOWN_MS;
   if (force && process.env.NODE_ENV === "production") {
     throw new Error("Le mode FORCE est interdit en production.");
   }
@@ -116,7 +120,8 @@ export async function runPriceWatch(options: {
       await renewLock(lockToken);
       const now = new Date();
 
-      if (!isScrapeDue(match.lastScrapedAt, now, force)) {
+      if (!isScrapeDue(match.lastScrapedAt, now, force, cooldownMs)) {
+        const cooldownDays = Math.max(1, Math.round(cooldownMs / DAY_MS));
         await prisma.priceObservation.create({
           data: {
             matchId: match.id,
@@ -125,8 +130,14 @@ export async function runPriceWatch(options: {
             url: match.url,
             durationMs: 0,
             success: false,
-            errorCode: "SKIPPED_24H",
-            errorMessage: "URL déjà relevée au cours des dernières 24 heures.",
+            errorCode:
+              cooldownMs === SCRAPE_COOLDOWN_MS
+                ? "SKIPPED_24H"
+                : "SKIPPED_INTERVAL",
+            errorMessage:
+              cooldownMs === SCRAPE_COOLDOWN_MS
+                ? "URL déjà relevée au cours des dernières 24 heures."
+                : `URL déjà relevée au cours des ${cooldownDays} derniers jours.`,
           },
         });
         skipped += 1;
@@ -243,14 +254,21 @@ export async function runPriceWatch(options: {
         succeeded,
         failed,
         skipped,
+        errorMessage:
+          failed > 0 ? `${failed} relevé(s) ont rencontré une erreur.` : null,
         finishedAt: new Date(),
       },
     });
   } catch (error) {
     if (runId) {
+      const details = errorDetails(error);
       await prisma.scrapeRun.update({
         where: { id: runId },
-        data: { status: "FAILED", finishedAt: new Date() },
+        data: {
+          status: "FAILED",
+          errorMessage: details.message,
+          finishedAt: new Date(),
+        },
       });
     }
     throw error;

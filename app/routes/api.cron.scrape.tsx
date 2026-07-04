@@ -1,9 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import type { ActionFunctionArgs } from "react-router";
-import {
-  runPriceWatch,
-  ScrapeAlreadyRunningError,
-} from "../services/scrape-runner.server";
+import { runScheduledPriceWatch } from "../services/automation.server";
+import { ScrapeAlreadyRunningError } from "../services/scrape-runner.server";
 
 function authorized(request: Request) {
   const secret = process.env.CRON_SECRET;
@@ -26,9 +24,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   try {
-    const run = await runPriceWatch({ trigger: "CRON" });
+    const result = await runScheduledPriceWatch();
+    if (!result.launched) {
+      return Response.json({
+        ok: true,
+        launched: false,
+        reason: result.reason,
+        nextRunAt: "nextRunAt" in result ? result.nextRunAt : null,
+      });
+    }
+    const { run } = result;
     return Response.json({
       ok: true,
+      launched: true,
       runId: run.id,
       succeeded: run.succeeded,
       skipped: run.skipped,

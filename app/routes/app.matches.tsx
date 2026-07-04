@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useLoaderData } from "react-router";
+import {
+  Form,
+  useActionData,
+  useLoaderData,
+  useNavigation,
+} from "react-router";
 import type { ProductMatchStatus } from "@prisma/client";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
 import { runPriceWatch } from "../services/scrape-runner.server";
+import { discoverProductMatches } from "../services/product-discovery.server";
 import { validateTargetUrl } from "../services/url-safety.server";
 
 const MATCH_STATUS_LABELS = {
@@ -169,6 +175,37 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = String(formData.get("intent") || "");
 
   try {
+    if (intent === "discover") {
+      const productShopifyId = String(formData.get("productShopifyId") || "");
+      const productId = String(formData.get("productId") || "");
+      const product = productId
+        ? await prisma.shopifyProduct.findUnique({ where: { id: productId } })
+        : await prisma.shopifyProduct.findUnique({
+            where: { shopifyId: productShopifyId },
+          });
+      if (!product || product.status === "DELETED") {
+        return {
+          ok: false,
+          message:
+            "Produit introuvable. Synchronisez Shopify puis réessayez.",
+        };
+      }
+      const results = await discoverProductMatches(product.id);
+      const found = results.filter((result) => result.status === "FOUND").length;
+      const missing = results.filter(
+        (result) => result.status === "NOT_FOUND",
+      ).length;
+      const errors = results.filter((result) => result.status === "ERROR").length;
+      const existing = results.filter(
+        (result) => result.status === "ALREADY_EXISTS",
+      ).length;
+      return {
+        ok: errors === 0,
+        message: `${found} proposition(s) ajoutée(s), ${missing} sans résultat, ${existing} déjà renseignée(s), ${errors} erreur(s).`,
+        discoveryResults: results,
+      };
+    }
+
     if (intent === "create" || intent === "addCompetitor") {
       const productShopifyId = String(formData.get("productShopifyId") || "");
       const productId = String(formData.get("productId") || "");
@@ -341,10 +378,12 @@ export default function MatchesPage() {
   const { competitors, matches, initialProduct, filters } =
     useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
+  const navigation = useNavigation();
   const shopify = useAppBridge();
   const [pickedProduct, setPickedProduct] = useState<PickedProduct | null>(
     initialProduct,
   );
+  const busy = navigation.state !== "idle";
 
   useEffect(() => {
     if (actionData?.message) {
@@ -418,63 +457,132 @@ export default function MatchesPage() {
   return (
     <s-page heading="Correspondances produits">
       <s-section heading="Nouvelle correspondance">
-        <Form method="post">
-          <input type="hidden" name="intent" value="create" />
-          <input
-            type="hidden"
-            name="productShopifyId"
-            value={pickedProduct?.shopifyId || ""}
-          />
-          <s-stack gap="base">
-            <s-box
-              border="base"
-              borderRadius="base"
-              padding="base"
-              background="subdued"
+        <s-stack gap="base">
+          <s-box
+            border="base"
+            borderRadius="base"
+            padding="base"
+            background="subdued"
+          >
+            <s-stack
+              direction="inline"
+              gap="base"
+              alignItems="center"
+              justifyContent="space-between"
             >
-              <s-stack
-                direction="inline"
-                gap="base"
-                alignItems="center"
-                justifyContent="space-between"
-              >
-                <s-stack direction="inline" gap="base" alignItems="center">
-                  {pickedProduct?.imageUrl && (
-                    <s-thumbnail
-                      src={pickedProduct.imageUrl}
-                      alt={pickedProduct.imageAlt || pickedProduct.title}
-                      size="small"
-                    />
-                  )}
-                  <s-stack gap="small-200">
-                    <s-text type="strong">
-                      {pickedProduct
-                        ? pickedProduct.title
-                        : "Aucun produit sélectionné"}
-                    </s-text>
-                    <s-text color="subdued">
-                      {pickedProduct
-                        ? `${pickedProduct.vendor || "Sans marque"} · ${
-                            pickedProduct.price
-                          } ${pickedProduct.currencyCode}`
-                        : "Utilisez le Product Picker Shopify."}
-                    </s-text>
-                  </s-stack>
+              <s-stack direction="inline" gap="base" alignItems="center">
+                {pickedProduct?.imageUrl && (
+                  <s-thumbnail
+                    src={pickedProduct.imageUrl}
+                    alt={pickedProduct.imageAlt || pickedProduct.title}
+                    size="small"
+                  />
+                )}
+                <s-stack gap="small-200">
+                  <s-text type="strong">
+                    {pickedProduct
+                      ? pickedProduct.title
+                      : "Aucun produit sélectionné"}
+                  </s-text>
+                  <s-text color="subdued">
+                    {pickedProduct
+                      ? `${pickedProduct.vendor || "Sans marque"} · ${
+                          pickedProduct.price
+                        } ${pickedProduct.currencyCode}`
+                      : "Utilisez le Product Picker Shopify."}
+                  </s-text>
                 </s-stack>
-                <s-button
-                  type="button"
-                  icon="product"
-                  variant={pickedProduct ? "secondary" : "primary"}
-                  onClick={openProductPicker}
-                >
-                  {pickedProduct ? "Changer" : "Choisir dans Shopify"}
-                </s-button>
               </s-stack>
-            </s-box>
+              <s-button
+                type="button"
+                icon="product"
+                variant={pickedProduct ? "secondary" : "primary"}
+                onClick={openProductPicker}
+              >
+                {pickedProduct ? "Changer" : "Choisir dans Shopify"}
+              </s-button>
+            </s-stack>
+          </s-box>
 
+          <s-banner tone="info" heading="Recherche automatique expérimentale">
+            Price Watch analysera les sitemaps publics des concurrents approuvés.
+            Les URLs trouvées seront ajoutées « À vérifier ».
+          </s-banner>
+
+          <Form method="post">
+            <input type="hidden" name="intent" value="discover" />
+            <input
+              type="hidden"
+              name="productShopifyId"
+              value={pickedProduct?.shopifyId || ""}
+            />
+            <s-button
+              type="submit"
+              variant="primary"
+              icon="search"
+              disabled={!pickedProduct || !approvedCompetitors}
+              {...(busy ? { loading: true } : {})}
+            >
+              Créer et rechercher chez tous les concurrents
+            </s-button>
+          </Form>
+
+          {actionData &&
+            "discoveryResults" in actionData &&
+            actionData.discoveryResults && (
+              <s-box border="base" borderRadius="base" padding="base">
+                <s-stack gap="base">
+                  <s-text type="strong">Résultat de la recherche</s-text>
+                  {actionData.discoveryResults.map((result) => (
+                    <s-stack
+                      key={result.competitorId}
+                      direction="inline"
+                      gap="small-200"
+                      alignItems="center"
+                    >
+                      <s-badge
+                        tone={
+                          result.status === "FOUND"
+                            ? "success"
+                            : result.status === "ERROR"
+                              ? "critical"
+                              : result.status === "NOT_FOUND"
+                                ? "warning"
+                                : "neutral"
+                        }
+                      >
+                        {result.status === "FOUND"
+                          ? "Trouvé"
+                          : result.status === "ERROR"
+                            ? "Erreur"
+                            : result.status === "NOT_FOUND"
+                              ? "Non trouvé"
+                              : "Déjà renseigné"}
+                      </s-badge>
+                      <s-text>{result.competitorName}</s-text>
+                      {result.message && (
+                        <s-text color="subdued">{result.message}</s-text>
+                      )}
+                    </s-stack>
+                  ))}
+                </s-stack>
+              </s-box>
+            )}
+
+          <s-text color="subdued">
+            Ou ajoutez manuellement une URL précise :
+          </s-text>
+          <Form method="post">
+            <input type="hidden" name="intent" value="create" />
+            <input
+              type="hidden"
+              name="productShopifyId"
+              value={pickedProduct?.shopifyId || ""}
+            />
             <s-grid
               gap="base"
-              gridTemplateColumns="@container (inline-size > 700px) 1fr 1fr"
+              gridTemplateColumns="@container (inline-size > 700px) 1fr 1fr auto"
+              alignItems="end"
             >
               <s-select
                 label="Concurrent"
@@ -495,18 +603,16 @@ export default function MatchesPage() {
                 required
                 placeholder="https://concurrent.fr/produit"
               />
-            </s-grid>
-            <s-stack direction="inline" justifyContent="end">
               <s-button
                 type="submit"
-                variant="primary"
+                variant="secondary"
                 disabled={!pickedProduct}
               >
-                Ajouter à vérifier
+                Ajouter
               </s-button>
-            </s-stack>
-          </s-stack>
-        </Form>
+            </s-grid>
+          </Form>
+        </s-stack>
       </s-section>
 
       <s-section heading="Correspondances enregistrées">

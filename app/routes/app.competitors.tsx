@@ -144,6 +144,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           availabilitySelector: stringOrNull(
             formData.get("availabilitySelector"),
           ),
+          searchUrlTemplate: stringOrNull(formData.get("searchUrlTemplate")),
           termsCheckedAt: legalStatus === "PENDING" ? null : new Date(),
         },
       });
@@ -397,6 +398,13 @@ function CompetitorModal({
               label="Sélecteur de disponibilité"
               name="availabilitySelector"
               value={competitor.availabilitySelector || ""}
+            />
+            <s-text-field
+              label="URL de recherche publique"
+              name="searchUrlTemplate"
+              value={competitor.searchUrlTemplate || ""}
+              placeholder="https://concurrent.fr/search?q={query}"
+              details="Utilisez {query} à l’endroit où le nom du produit doit être inséré."
             />
           </s-grid>
           <s-text-area
