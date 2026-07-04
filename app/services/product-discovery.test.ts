@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildSearchQueries,
   extractSitemapLocations,
   scoreProductCandidate,
   sitemapUrlsFromRobots,
@@ -62,6 +63,37 @@ describe("product discovery", () => {
       "Central Ramrods Vektor V2 Tungsten Damping",
     );
     expect(exact).toBeGreaterThan(tungsten);
+  });
+
+  it("recherche aussi un produit sans son année commerciale", () => {
+    const product = {
+      title: "PSE Lazer X – 2026",
+      vendor: "PSE",
+      sku: null,
+    };
+    expect(buildSearchQueries(product)).toContain("PSE Lazer X");
+    expect(
+      scoreProductCandidate(
+        product,
+        "https://example.com/arcs/pse-lazer-x",
+        "PSE Lazer X",
+      ),
+    ).toBeGreaterThanOrEqual(0.72);
+  });
+
+  it("rejette une année explicitement contradictoire", () => {
+    const product = {
+      title: "PSE Lazer X – 2026",
+      vendor: "PSE",
+      sku: null,
+    };
+    expect(
+      scoreProductCandidate(
+        product,
+        "https://example.com/pse-lazer-x-2024",
+        "PSE Lazer X 2024",
+      ),
+    ).toBe(0);
   });
 
   it("extrait les URLs XML et les sitemaps déclarés", () => {

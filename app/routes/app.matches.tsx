@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
   Form,
   useActionData,
+  useFetcher,
   useLoaderData,
   useNavigation,
 } from "react-router";
@@ -11,7 +12,11 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
 import { runPriceWatch } from "../services/scrape-runner.server";
-import { discoverProductMatches } from "../services/product-discovery.server";
+import {
+  discoverProductMatch,
+  discoverProductMatches,
+  type DiscoveryResult,
+} from "../services/product-discovery.server";
 import { validateTargetUrl } from "../services/url-safety.server";
 
 const MATCH_STATUS_LABELS = {
@@ -175,6 +180,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = String(formData.get("intent") || "");
 
   try {
+    if (intent === "discoverOne") {
+      const productShopifyId = String(formData.get("productShopifyId") || "");
+      const competitorId = String(formData.get("competitorId") || "");
+      const product = await prisma.shopifyProduct.findUnique({
+        where: { shopifyId: productShopifyId },
+      });
+      if (!product || product.status === "DELETED") {
+        return {
+          ok: false,
+          message:
+            "Produit introuvable. Synchronisez Shopify puis réessayez.",
+        };
+      }
+      const discoveryResult = await discoverProductMatch(
+        product.id,
+        competitorId,
+      );
+      return {
+        ok: discoveryResult.status !== "ERROR",
+        message: discoveryResult.message || discoveryResult.status,
+        discoveryResult,
+      };
+    }
+
     if (intent === "discover") {
       const productShopifyId = String(formData.get("productShopifyId") || "");
       const productId = String(formData.get("productId") || "");
@@ -378,18 +407,96 @@ export default function MatchesPage() {
   const { competitors, matches, initialProduct, filters } =
     useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
+  const discoveryFetcher = useFetcher<typeof action>();
   const navigation = useNavigation();
   const shopify = useAppBridge();
   const [pickedProduct, setPickedProduct] = useState<PickedProduct | null>(
     initialProduct,
   );
-  const busy = navigation.state !== "idle";
+  const discoveryQueue = useRef<typeof competitors>([]);
+  const discoveryIndex = useRef(0);
+  const discoveryProductId = useRef("");
+  const discoveryResults = useRef<DiscoveryResult[]>([]);
+  const lastDiscoveryResponse = useRef<unknown>(null);
+  const [discoveryState, setDiscoveryState] = useState<{
+    running: boolean;
+    current: number;
+    total: number;
+    currentName: string;
+    results: DiscoveryResult[];
+  }>({
+    running: false,
+    current: 0,
+    total: 0,
+    currentName: "",
+    results: [],
+  });
+  const busy = navigation.state !== "idle" || discoveryState.running;
 
   useEffect(() => {
     if (actionData?.message) {
       shopify.toast.show(actionData.message, { isError: !actionData.ok });
     }
   }, [actionData, shopify]);
+
+  useEffect(() => {
+    const data = discoveryFetcher.data;
+    if (
+      !discoveryState.running ||
+      discoveryFetcher.state !== "idle" ||
+      !data ||
+      data === lastDiscoveryResponse.current
+    ) {
+      return;
+    }
+    lastDiscoveryResponse.current = data;
+    const competitor = discoveryQueue.current[discoveryIndex.current];
+    const result =
+      "discoveryResult" in data && data.discoveryResult
+        ? data.discoveryResult
+        : {
+            competitorId: competitor.id,
+            competitorName: competitor.name,
+            status: "ERROR" as const,
+            message: data.message || "Erreur inconnue.",
+          };
+    discoveryResults.current = [...discoveryResults.current, result];
+    const nextIndex = discoveryIndex.current + 1;
+
+    if (nextIndex < discoveryQueue.current.length) {
+      discoveryIndex.current = nextIndex;
+      const nextCompetitor = discoveryQueue.current[nextIndex];
+      setDiscoveryState((state) => ({
+        ...state,
+        current: nextIndex + 1,
+        currentName: nextCompetitor.name,
+        results: discoveryResults.current,
+      }));
+      discoveryFetcher.submit(
+        {
+          intent: "discoverOne",
+          productShopifyId: discoveryProductId.current,
+          competitorId: nextCompetitor.id,
+        },
+        { method: "POST" },
+      );
+      return;
+    }
+
+    const found = discoveryResults.current.filter(
+      (item) => item.status === "FOUND",
+    ).length;
+    setDiscoveryState((state) => ({
+      ...state,
+      running: false,
+      results: discoveryResults.current,
+    }));
+    shopify.toast.show(
+      `Recherche terminée : ${found}/${discoveryQueue.current.length} concurrent(s) trouvé(s).`,
+    );
+    // The fetcher and queue are intentionally coordinated as a sequential job.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [discoveryFetcher.data, discoveryFetcher.state]);
 
   const approvedCompetitors = useMemo(
     () =>
@@ -452,6 +559,47 @@ export default function MatchesPage() {
       price: product.variants?.[0]?.price || "—",
       currencyCode: "EUR",
     });
+    setDiscoveryState({
+      running: false,
+      current: 0,
+      total: 0,
+      currentName: "",
+      results: [],
+    });
+  }
+
+  function startDiscovery() {
+    if (!pickedProduct || discoveryState.running) return;
+    const queue = competitors.filter(
+      (competitor) =>
+        competitor.active && competitor.legalStatus === "APPROVED",
+    );
+    if (!queue.length) {
+      shopify.toast.show("Aucun concurrent actif et approuvé.", {
+        isError: true,
+      });
+      return;
+    }
+    discoveryQueue.current = queue;
+    discoveryIndex.current = 0;
+    discoveryProductId.current = pickedProduct.shopifyId;
+    discoveryResults.current = [];
+    lastDiscoveryResponse.current = discoveryFetcher.data;
+    setDiscoveryState({
+      running: true,
+      current: 1,
+      total: queue.length,
+      currentName: queue[0].name,
+      results: [],
+    });
+    discoveryFetcher.submit(
+      {
+        intent: "discoverOne",
+        productShopifyId: pickedProduct.shopifyId,
+        competitorId: queue[0].id,
+      },
+      { method: "POST" },
+    );
   }
 
   return (
@@ -498,6 +646,7 @@ export default function MatchesPage() {
                 icon="product"
                 variant={pickedProduct ? "secondary" : "primary"}
                 onClick={openProductPicker}
+                disabled={discoveryState.running}
               >
                 {pickedProduct ? "Changer" : "Choisir dans Shopify"}
               </s-button>
@@ -509,65 +658,78 @@ export default function MatchesPage() {
             Les URLs trouvées seront ajoutées « À vérifier ».
           </s-banner>
 
-          <Form method="post">
-            <input type="hidden" name="intent" value="discover" />
-            <input
-              type="hidden"
-              name="productShopifyId"
-              value={pickedProduct?.shopifyId || ""}
-            />
-            <s-button
-              type="submit"
-              variant="primary"
-              icon="search"
-              disabled={!pickedProduct || !approvedCompetitors}
-              {...(busy ? { loading: true } : {})}
-            >
-              Créer et rechercher chez tous les concurrents
-            </s-button>
-          </Form>
+          <s-button
+            type="button"
+            variant="primary"
+            icon="search"
+            disabled={!pickedProduct || !approvedCompetitors || busy}
+            onClick={startDiscovery}
+            {...(discoveryState.running ? { loading: true } : {})}
+          >
+            Créer et rechercher chez tous les concurrents
+          </s-button>
 
-          {actionData &&
-            "discoveryResults" in actionData &&
-            actionData.discoveryResults && (
-              <s-box border="base" borderRadius="base" padding="base">
-                <s-stack gap="base">
-                  <s-text type="strong">Résultat de la recherche</s-text>
-                  {actionData.discoveryResults.map((result) => (
-                    <s-stack
-                      key={result.competitorId}
-                      direction="inline"
-                      gap="small-200"
-                      alignItems="center"
-                    >
-                      <s-badge
-                        tone={
-                          result.status === "FOUND"
-                            ? "success"
-                            : result.status === "ERROR"
-                              ? "critical"
-                              : result.status === "NOT_FOUND"
-                                ? "warning"
-                                : "neutral"
-                        }
-                      >
-                        {result.status === "FOUND"
-                          ? "Trouvé"
+          {discoveryState.running && (
+            <s-banner
+              tone="info"
+              heading={`Recherche ${discoveryState.current}/${discoveryState.total} · ${
+                discoveryState.results.filter(
+                  (result) => result.status === "FOUND",
+                ).length
+              } trouvé(s)`}
+            >
+              <s-stack direction="inline" gap="small-200" alignItems="center">
+                <s-spinner accessibilityLabel="Recherche en cours" />
+                <s-text>
+                  Analyse de {discoveryState.currentName}. Les résultats déjà
+                  trouvés sont conservés au fur et à mesure.
+                </s-text>
+              </s-stack>
+            </s-banner>
+          )}
+
+          {discoveryState.results.length > 0 && (
+            <s-box border="base" borderRadius="base" padding="base">
+              <s-stack gap="base">
+                <s-text type="strong">
+                  Résultats ({discoveryState.results.length}/
+                  {discoveryState.total})
+                </s-text>
+                {discoveryState.results.map((result) => (
+                  <s-stack
+                    key={result.competitorId}
+                    direction="inline"
+                    gap="small-200"
+                    alignItems="center"
+                  >
+                    <s-badge
+                      tone={
+                        result.status === "FOUND"
+                          ? "success"
                           : result.status === "ERROR"
-                            ? "Erreur"
+                            ? "critical"
                             : result.status === "NOT_FOUND"
-                              ? "Non trouvé"
-                              : "Déjà renseigné"}
-                      </s-badge>
-                      <s-text>{result.competitorName}</s-text>
-                      {result.message && (
-                        <s-text color="subdued">{result.message}</s-text>
-                      )}
-                    </s-stack>
-                  ))}
-                </s-stack>
-              </s-box>
-            )}
+                              ? "warning"
+                              : "neutral"
+                      }
+                    >
+                      {result.status === "FOUND"
+                        ? "Trouvé"
+                        : result.status === "ERROR"
+                          ? "Erreur"
+                          : result.status === "NOT_FOUND"
+                            ? "Non trouvé"
+                            : "Déjà renseigné"}
+                    </s-badge>
+                    <s-text>{result.competitorName}</s-text>
+                    {result.message && (
+                      <s-text color="subdued">{result.message}</s-text>
+                    )}
+                  </s-stack>
+                ))}
+              </s-stack>
+            </s-box>
+          )}
 
           <s-text color="subdued">
             Ou ajoutez manuellement une URL précise :

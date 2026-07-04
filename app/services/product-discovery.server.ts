@@ -43,6 +43,14 @@ function normalize(value: string) {
     .trim();
 }
 
+function isSignificantToken(token: string) {
+  return (
+    token === "x" ||
+    token.length > 2 ||
+    (token.length >= 2 && /\d/.test(token))
+  );
+}
+
 function identityTokens(product: ProductIdentity) {
   return Array.from(
     new Set(
@@ -50,11 +58,43 @@ function identityTokens(product: ProductIdentity) {
         .split(" ")
         .filter(
           (token) =>
-            (token.length > 2 || (token.length >= 2 && /\d/.test(token))) &&
-            !STOP_WORDS.has(token),
+            isSignificantToken(token) &&
+            !STOP_WORDS.has(token) &&
+            !/^20\d{2}$/.test(token),
         ),
     ),
   );
+}
+
+export function buildSearchQueries(product: ProductIdentity) {
+  const title = product.title.replace(/[–—]/g, " ").replace(/\s+/g, " ").trim();
+  const withoutYear = title
+    .replace(/\b20\d{2}\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const normalizedVendor = normalize(product.vendor || "");
+  const withoutVendor = withoutYear
+    .split(" ")
+    .filter((token) => normalize(token) !== normalizedVendor)
+    .join(" ")
+    .trim();
+  const queries = [
+    product.sku?.trim(),
+    title,
+    withoutYear,
+    product.vendor && withoutVendor
+      ? `${product.vendor} ${withoutVendor}`
+      : null,
+    withoutVendor,
+  ].filter((query): query is string => Boolean(query && query.length >= 2));
+
+  const seen = new Set<string>();
+  return queries.filter((query) => {
+    const key = normalize(query);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 export function scoreProductCandidate(
@@ -64,6 +104,16 @@ export function scoreProductCandidate(
 ) {
   const pathname = decodeURIComponent(new URL(candidateUrl).pathname);
   const candidate = normalize(candidateLabel || pathname);
+  const expectedYears: string[] =
+    normalize(product.title).match(/\b20\d{2}\b/g) || [];
+  const candidateYears: string[] = candidate.match(/\b20\d{2}\b/g) || [];
+  if (
+    expectedYears.length &&
+    candidateYears.length &&
+    !candidateYears.some((year) => expectedYears.includes(year))
+  ) {
+    return 0;
+  }
   const normalizedSku = normalize(product.sku || "").replace(/\s/g, "");
   if (
     normalizedSku.length >= 3 &&
@@ -77,7 +127,7 @@ export function scoreProductCandidate(
   const matched = tokens.filter((token) => candidate.includes(token)).length;
   if (matched < Math.min(2, tokens.length)) return 0;
   const candidateTokens = new Set(
-    candidate.split(" ").filter((token) => token.length > 2),
+    candidate.split(" ").filter(isSignificantToken),
   );
   const coverage = matched / tokens.length;
   const precision = matched / Math.max(1, candidateTokens.size);
@@ -124,14 +174,7 @@ async function discoverOnCompetitor(
   },
   politeFetch: (url: string, domain: string) => Promise<string>,
 ) {
-  const fullQuery = `${product.vendor || ""} ${product.title}`.trim();
-  const queryVariants = Array.from(
-    new Set(
-      [product.sku?.trim(), fullQuery].filter(
-        (query): query is string => Boolean(query && query.length >= 3),
-      ),
-    ),
-  );
+  const queryVariants = buildSearchQueries(product);
   const searchTemplates = Array.from(
     new Set(
       [
@@ -143,13 +186,18 @@ async function discoverOnCompetitor(
     ),
   ).slice(0, competitor.searchUrlTemplate ? 1 : 3);
   const searchAttempts = competitor.searchUrlTemplate
-    ? queryVariants.slice(0, 2).map((query) => ({
+    ? queryVariants.slice(0, 4).map((query) => ({
         template: competitor.searchUrlTemplate as string,
         query,
       }))
     : searchTemplates.map((template) => ({
         template,
-        query: fullQuery,
+        query:
+          queryVariants.find(
+            (query) =>
+              normalize(query) !== normalize(product.sku || "") &&
+              !/\b20\d{2}\b/.test(query),
+          ) || product.title,
       }));
   const errors: string[] = [];
   let successfulSource = false;
@@ -303,96 +351,94 @@ async function discoverOnCompetitor(
   return null;
 }
 
-export async function discoverProductMatches(productId: string) {
-  const product = await prisma.shopifyProduct.findUnique({
-    where: { id: productId },
-    include: { matches: true },
-  });
+async function politeFetch(url: string, domain: string) {
+  await wait(randomInt(2_000, 5_001));
+  const page = await fetchHtmlPage(url, domain);
+  if (page.status < 200 || page.status >= 300) {
+    throw new Error(`HTTP ${page.status}`);
+  }
+  if (/challenges\.cloudflare\.com|<title>\s*just a moment/i.test(page.html)) {
+    throw new Error(
+      "Protection anti-bot détectée : recherche automatique non autorisée.",
+    );
+  }
+  return page.html;
+}
+
+export async function discoverProductMatch(
+  productId: string,
+  competitorId: string,
+): Promise<DiscoveryResult> {
+  const [product, competitor, existing] = await Promise.all([
+    prisma.shopifyProduct.findUnique({ where: { id: productId } }),
+    prisma.competitor.findUnique({ where: { id: competitorId } }),
+    prisma.productMatch.findFirst({ where: { productId, competitorId } }),
+  ]);
   if (!product || product.status === "DELETED") {
     throw new Error("Produit introuvable dans Price Watch.");
   }
+  if (!competitor || !competitor.active || competitor.legalStatus !== "APPROVED") {
+    throw new Error("Concurrent inactif ou non approuvé.");
+  }
+  if (existing) {
+    return {
+      competitorId: competitor.id,
+      competitorName: competitor.name,
+      status: "ALREADY_EXISTS",
+    };
+  }
 
+  try {
+    const candidate = await discoverOnCompetitor(
+      {
+        title: product.title,
+        vendor: product.vendor,
+        sku: product.firstVariantSku,
+      },
+      competitor,
+      politeFetch,
+    );
+    if (!candidate) {
+      return {
+        competitorId: competitor.id,
+        competitorName: competitor.name,
+        status: "NOT_FOUND",
+        message: "Recherche accessible, mais aucun candidat suffisamment proche.",
+      };
+    }
+    await prisma.productMatch.create({
+      data: {
+        productId: product.id,
+        competitorId: competitor.id,
+        url: candidate.url,
+        status: "PENDING",
+      },
+    });
+    return {
+      competitorId: competitor.id,
+      competitorName: competitor.name,
+      status: "FOUND",
+      url: candidate.url,
+      message: `${candidate.source}, score ${Math.round(candidate.score * 100)} %.`,
+    };
+  } catch (error) {
+    return {
+      competitorId: competitor.id,
+      competitorName: competitor.name,
+      status: "ERROR",
+      message: error instanceof Error ? error.message : "Erreur inconnue.",
+    };
+  }
+}
+
+export async function discoverProductMatches(productId: string) {
   const competitors = await prisma.competitor.findMany({
     where: { active: true, legalStatus: "APPROVED" },
     orderBy: { name: "asc" },
   });
-  const existingCompetitors = new Set(
-    product.matches.map((match) => match.competitorId),
-  );
-  let hasFetched = false;
-  const politeFetch = async (url: string, domain: string) => {
-    if (hasFetched) await wait(randomInt(2_000, 5_001));
-    hasFetched = true;
-    const page = await fetchHtmlPage(url, domain);
-    if (page.status < 200 || page.status >= 300) {
-      throw new Error(`HTTP ${page.status}`);
-    }
-    if (
-      /challenges\.cloudflare\.com|<title>\s*just a moment/i.test(page.html)
-    ) {
-      throw new Error(
-        "Protection anti-bot détectée : recherche automatique non autorisée.",
-      );
-    }
-    return page.html;
-  };
-
   const results: DiscoveryResult[] = [];
   for (const competitor of competitors) {
-    if (existingCompetitors.has(competitor.id)) {
-      results.push({
-        competitorId: competitor.id,
-        competitorName: competitor.name,
-        status: "ALREADY_EXISTS",
-      });
-      continue;
-    }
-
-    try {
-      const candidate = await discoverOnCompetitor(
-        {
-          title: product.title,
-          vendor: product.vendor,
-          sku: product.firstVariantSku,
-        },
-        competitor,
-        politeFetch,
-      );
-      if (!candidate) {
-        results.push({
-          competitorId: competitor.id,
-          competitorName: competitor.name,
-          status: "NOT_FOUND",
-          message:
-            "Recherche accessible, mais aucun candidat suffisamment proche.",
-        });
-        continue;
-      }
-      await prisma.productMatch.create({
-        data: {
-          productId: product.id,
-          competitorId: competitor.id,
-          url: candidate.url,
-          status: "PENDING",
-        },
-      });
-      results.push({
-        competitorId: competitor.id,
-        competitorName: competitor.name,
-        status: "FOUND",
-        url: candidate.url,
-        message: `${candidate.source}, score ${Math.round(
-          candidate.score * 100,
-        )} %.`,
-      });
-    } catch (error) {
-      results.push({
-        competitorId: competitor.id,
-        competitorName: competitor.name,
-        status: "ERROR",
-        message: error instanceof Error ? error.message : "Erreur inconnue.",
-      });
-    }
+    results.push(await discoverProductMatch(productId, competitor.id));
   }
   return results;
 }
