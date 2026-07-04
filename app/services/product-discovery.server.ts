@@ -7,7 +7,7 @@ import { validateTargetUrl } from "./url-safety.server";
 
 const MAX_SITEMAP_REQUESTS = 3;
 const MAX_CANDIDATE_URLS = 50_000;
-const MINIMUM_SCORE = 0.5;
+const MINIMUM_SCORE = 0.72;
 const STOP_WORDS = new Set([
   "avec",
   "chez",
@@ -48,7 +48,11 @@ function identityTokens(product: ProductIdentity) {
     new Set(
       normalize(`${product.vendor || ""} ${product.title}`)
         .split(" ")
-        .filter((token) => token.length > 2 && !STOP_WORDS.has(token)),
+        .filter(
+          (token) =>
+            (token.length > 2 || (token.length >= 2 && /\d/.test(token))) &&
+            !STOP_WORDS.has(token),
+        ),
     ),
   );
 }
@@ -120,8 +124,13 @@ async function discoverOnCompetitor(
   },
   politeFetch: (url: string, domain: string) => Promise<string>,
 ) {
-  const encodedQuery = encodeURIComponent(
-    `${product.vendor || ""} ${product.title}`.trim(),
+  const fullQuery = `${product.vendor || ""} ${product.title}`.trim();
+  const queryVariants = Array.from(
+    new Set(
+      [product.sku?.trim(), fullQuery].filter(
+        (query): query is string => Boolean(query && query.length >= 3),
+      ),
+    ),
   );
   const searchTemplates = Array.from(
     new Set(
@@ -132,12 +141,23 @@ async function discoverOnCompetitor(
         `https://${competitor.domain}/catalogsearch/result/?q={query}`,
       ].filter((template): template is string => Boolean(template)),
     ),
-  ).slice(0, competitor.searchUrlTemplate ? 2 : 3);
+  ).slice(0, competitor.searchUrlTemplate ? 1 : 3);
+  const searchAttempts = competitor.searchUrlTemplate
+    ? queryVariants.slice(0, 2).map((query) => ({
+        template: competitor.searchUrlTemplate as string,
+        query,
+      }))
+    : searchTemplates.map((template) => ({
+        template,
+        query: fullQuery,
+      }));
+  const errors: string[] = [];
+  let successfulSource = false;
 
-  for (const template of searchTemplates) {
+  for (const { template, query } of searchAttempts) {
     try {
       const searchUrl = validateTargetUrl(
-        template.replace("{query}", encodedQuery),
+        template.replace("{query}", encodeURIComponent(query)),
         competitor.domain,
       );
       const searchAllowed =
@@ -145,9 +165,13 @@ async function discoverOnCompetitor(
           competitor.robotsContent,
           `${searchUrl.pathname}${searchUrl.search}`,
         ) || competitor.robotsOverrideConfirmed;
-      if (!searchAllowed) continue;
+      if (!searchAllowed) {
+        errors.push(`Recherche interdite par robots.txt : ${searchUrl.pathname}`);
+        continue;
+      }
 
       const html = await politeFetch(searchUrl.toString(), competitor.domain);
+      successfulSource = true;
       const $ = load(html);
       const searchCandidates = $("a[href]")
         .map((_, element) => {
@@ -190,8 +214,11 @@ async function discoverOnCompetitor(
             Boolean(candidate) && candidate.score >= MINIMUM_SCORE,
         )
         .sort((a, b) => b.score - a.score);
-      if (searchCandidates[0]) return searchCandidates[0];
-    } catch {
+      if (searchCandidates[0]) {
+        return { ...searchCandidates[0], source: "recherche publique" };
+      }
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : "Erreur inconnue.");
       // Continue with another public search URL, then with sitemaps.
     }
   }
@@ -219,7 +246,9 @@ async function discoverOnCompetitor(
     let xml: string;
     try {
       xml = await politeFetch(sitemapUrl, competitor.domain);
-    } catch {
+      successfulSource = true;
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : "Erreur inconnue.");
       continue;
     }
     const locations = extractSitemapLocations(xml);
@@ -261,10 +290,17 @@ async function discoverOnCompetitor(
     }
   }
 
-  return candidates
+  const sitemapCandidate = candidates
     .map((url) => ({ url, score: scoreProductCandidate(product, url) }))
     .filter((candidate) => candidate.score >= MINIMUM_SCORE)
     .sort((a, b) => b.score - a.score)[0];
+  if (sitemapCandidate) {
+    return { ...sitemapCandidate, source: "sitemap" };
+  }
+  if (!successfulSource && errors.length) {
+    throw new Error(Array.from(new Set(errors)).slice(0, 2).join(" · "));
+  }
+  return null;
 }
 
 export async function discoverProductMatches(productId: string) {
@@ -290,6 +326,13 @@ export async function discoverProductMatches(productId: string) {
     const page = await fetchHtmlPage(url, domain);
     if (page.status < 200 || page.status >= 300) {
       throw new Error(`HTTP ${page.status}`);
+    }
+    if (
+      /challenges\.cloudflare\.com|<title>\s*just a moment/i.test(page.html)
+    ) {
+      throw new Error(
+        "Protection anti-bot détectée : recherche automatique non autorisée.",
+      );
     }
     return page.html;
   };
@@ -320,7 +363,8 @@ export async function discoverProductMatches(productId: string) {
           competitorId: competitor.id,
           competitorName: competitor.name,
           status: "NOT_FOUND",
-          message: "Aucun candidat suffisamment proche dans les sitemaps.",
+          message:
+            "Recherche accessible, mais aucun candidat suffisamment proche.",
         });
         continue;
       }
@@ -337,6 +381,9 @@ export async function discoverProductMatches(productId: string) {
         competitorName: competitor.name,
         status: "FOUND",
         url: candidate.url,
+        message: `${candidate.source}, score ${Math.round(
+          candidate.score * 100,
+        )} %.`,
       });
     } catch (error) {
       results.push({

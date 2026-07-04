@@ -45,6 +45,25 @@ describe("product discovery", () => {
     ).toBe(0);
   });
 
+  it("préfère le produit exact à une déclinaison supplémentaire", () => {
+    const product = {
+      title: "Central Ramrods Vektor V2",
+      vendor: "Ramrods",
+      sku: null,
+    };
+    const exact = scoreProductCandidate(
+      product,
+      "https://example.com/central-ramrods-vektor-v2",
+      "Central Ramrods Vektor V2",
+    );
+    const tungsten = scoreProductCandidate(
+      product,
+      "https://example.com/central-ramrods-vektor-v2-tungsten-damping",
+      "Central Ramrods Vektor V2 Tungsten Damping",
+    );
+    expect(exact).toBeGreaterThan(tungsten);
+  });
+
   it("extrait les URLs XML et les sitemaps déclarés", () => {
     expect(
       extractSitemapLocations(

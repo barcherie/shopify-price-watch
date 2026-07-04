@@ -4,7 +4,7 @@ const prisma = new PrismaClient();
 
 const competitors = [
   { name: "Star Archerie", domain: "star-archerie.com" },
-  { name: "Normandie Archerie", domain: "normandie-archerie.fr" },
+  { name: "Normandie Archerie", domain: "normandie-archerie.com" },
   { name: "Bourgogne Archerie", domain: "bourgognearcherie.com" },
   { name: "Donut Archery", domain: "donutarchery.com" },
   { name: "Europe Archery", domain: "europearchery.com" },

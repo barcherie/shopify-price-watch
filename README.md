@@ -144,6 +144,13 @@ titre servent à classer les URLs candidates. Toutes les propositions restent
 au statut `À vérifier` et doivent être contrôlées humainement. Aucun moteur de
 recherche externe n’est scrapé.
 
+Chaque concurrent peut définir une `URL de recherche publique` contenant le
+marqueur `{query}`. Des modèles sont préconfigurés pour Star Archerie,
+Normandie Archerie, Bourgogne Archerie, Donut Archery et Erhart Sports. Si un
+site renvoie une protection technique, comme le challenge Cloudflare d’Europe
+Archery, l’application signale explicitement le blocage et n’essaie pas de le
+contourner.
+
 Seules les correspondances validées apparaissent dans le benchmark. Les
 produits sans correspondance validée ne sont pas affichés.
 
