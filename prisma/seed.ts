@@ -7,6 +7,7 @@ const competitors = [
   { name: "Normandie Archerie", domain: "normandie-archerie.com" },
   { name: "Bourgogne Archerie", domain: "bourgognearcherie.com" },
   { name: "Donut Archery", domain: "donutarchery.com" },
+  { name: "Diane Archerie", domain: "dianearcherie.com" },
   { name: "Europe Archery", domain: "europearchery.com" },
   { name: "Erhart Sports", domain: "erhart-sports.com" },
 ];

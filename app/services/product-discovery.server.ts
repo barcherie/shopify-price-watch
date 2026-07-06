@@ -5,9 +5,10 @@ import { fetchHtmlPage } from "./page-fetcher.server";
 import { robotsAllowsPath } from "./robots.server";
 import { validateTargetUrl } from "./url-safety.server";
 
-const MAX_SITEMAP_REQUESTS = 3;
+const MAX_SITEMAP_REQUESTS = 12;
 const MAX_CANDIDATE_URLS = 50_000;
 const MINIMUM_SCORE = 0.72;
+const MAX_CANDIDATES_TO_VERIFY = 3;
 const STOP_WORDS = new Set([
   "avec",
   "chez",
@@ -142,6 +143,79 @@ export function extractSitemapLocations(xml: string) {
     .filter(Boolean);
 }
 
+export function isSearchResultsUrl(candidateUrl: string, sourceUrl?: string) {
+  const candidate = new URL(candidateUrl);
+  if (
+    sourceUrl &&
+    candidate.pathname.replace(/\/+$/, "") ===
+      new URL(sourceUrl).pathname.replace(/\/+$/, "")
+  ) {
+    return true;
+  }
+
+  return candidate.pathname
+    .split("/")
+    .filter(Boolean)
+    .some(
+      (segment) =>
+        segment.toLowerCase() === "recherche" ||
+        segment.toLowerCase().includes("search"),
+    );
+}
+
+function jsonLdContainsProduct(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(jsonLdContainsProduct);
+  if (!value || typeof value !== "object") return false;
+
+  const record = value as Record<string, unknown>;
+  const types = Array.isArray(record["@type"])
+    ? record["@type"]
+    : [record["@type"]];
+  if (
+    types.some(
+      (type) => typeof type === "string" && type.toLowerCase() === "product",
+    )
+  ) {
+    return true;
+  }
+  return jsonLdContainsProduct(record["@graph"]);
+}
+
+export function verifiedProductUrl(
+  html: string,
+  candidateUrl: string,
+  domain: string,
+) {
+  const $ = load(html);
+  let hasProductJsonLd = false;
+  $('script[type="application/ld+json"]').each((_, element) => {
+    try {
+      if (jsonLdContainsProduct(JSON.parse($(element).text()))) {
+        hasProductJsonLd = true;
+      }
+    } catch {
+      // Ignore malformed third-party structured data.
+    }
+  });
+  const hasProductMetadata =
+    $('meta[property="og:type"][content="product" i]').length > 0 ||
+    $('meta[property^="product:"]').length > 0 ||
+    $('[itemtype*="schema.org/Product" i]').length > 0;
+  if (!hasProductJsonLd && !hasProductMetadata) return null;
+
+  const canonicalHref = $('link[rel="canonical"]').attr("href");
+  const canonical = validateTargetUrl(
+    canonicalHref
+      ? new URL(canonicalHref, candidateUrl).toString()
+      : candidateUrl,
+    domain,
+  );
+  if (isSearchResultsUrl(canonical.toString())) return null;
+  canonical.search = "";
+  canonical.hash = "";
+  return canonical.toString();
+}
+
 export function sitemapUrlsFromRobots(
   robotsContent: string | null,
   domain: string,
@@ -174,6 +248,40 @@ async function discoverOnCompetitor(
   },
   politeFetch: (url: string, domain: string) => Promise<string>,
 ) {
+  async function verifyCandidates(
+    candidates: Array<{ url: string; score: number }>,
+    source: string,
+  ) {
+    const uniqueCandidates = Array.from(
+      candidates
+        .reduce((byUrl, candidate) => {
+          const previous = byUrl.get(candidate.url);
+          if (!previous || candidate.score > previous.score) {
+            byUrl.set(candidate.url, candidate);
+          }
+          return byUrl;
+        }, new Map<string, { url: string; score: number }>())
+        .values(),
+    )
+      .sort((a, b) => b.score - a.score)
+      .slice(0, MAX_CANDIDATES_TO_VERIFY);
+
+    for (const candidate of uniqueCandidates) {
+      try {
+        const html = await politeFetch(candidate.url, competitor.domain);
+        const url = verifiedProductUrl(
+          html,
+          candidate.url,
+          competitor.domain,
+        );
+        if (url) return { ...candidate, url, source };
+      } catch (error) {
+        errors.push(error instanceof Error ? error.message : "Erreur inconnue.");
+      }
+    }
+    return null;
+  }
+
   const queryVariants = buildSearchQueries(product);
   const searchTemplates = Array.from(
     new Set(
@@ -230,11 +338,7 @@ async function discoverOnCompetitor(
               new URL(href, searchUrl).toString(),
               competitor.domain,
             );
-            if (
-              /\/(?:recherche|search|catalogsearch)(?:\/|$)/i.test(
-                target.pathname,
-              )
-            ) {
+            if (isSearchResultsUrl(target.toString(), searchUrl.toString())) {
               return null;
             }
             const targetAllowed =
@@ -262,9 +366,11 @@ async function discoverOnCompetitor(
             Boolean(candidate) && candidate.score >= MINIMUM_SCORE,
         )
         .sort((a, b) => b.score - a.score);
-      if (searchCandidates[0]) {
-        return { ...searchCandidates[0], source: "recherche publique" };
-      }
+      const verifiedCandidate = await verifyCandidates(
+        searchCandidates,
+        "recherche publique",
+      );
+      if (verifiedCandidate) return verifiedCandidate;
     } catch (error) {
       errors.push(error instanceof Error ? error.message : "Erreur inconnue.");
       // Continue with another public search URL, then with sitemaps.
@@ -338,13 +444,15 @@ async function discoverOnCompetitor(
     }
   }
 
-  const sitemapCandidate = candidates
+  const sitemapCandidates = candidates
     .map((url) => ({ url, score: scoreProductCandidate(product, url) }))
     .filter((candidate) => candidate.score >= MINIMUM_SCORE)
-    .sort((a, b) => b.score - a.score)[0];
-  if (sitemapCandidate) {
-    return { ...sitemapCandidate, source: "sitemap" };
-  }
+    .sort((a, b) => b.score - a.score);
+  const sitemapCandidate = await verifyCandidates(
+    sitemapCandidates,
+    "sitemap",
+  );
+  if (sitemapCandidate) return sitemapCandidate;
   if (!successfulSource && errors.length) {
     throw new Error(Array.from(new Set(errors)).slice(0, 2).join(" · "));
   }

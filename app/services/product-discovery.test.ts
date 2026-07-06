@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildSearchQueries,
   extractSitemapLocations,
+  isSearchResultsUrl,
   scoreProductCandidate,
   sitemapUrlsFromRobots,
+  verifiedProductUrl,
 } from "./product-discovery.server";
 
 describe("product discovery", () => {
@@ -108,5 +110,45 @@ describe("product discovery", () => {
         "example.com",
       ),
     ).toContain("https://example.com/products.xml");
+  });
+
+  it("ne confond jamais une recherche Diane avec une fiche produit", () => {
+    expect(
+      isSearchResultsUrl(
+        "https://dianearcherie.com/jolisearch?s=120254-1468",
+      ),
+    ).toBe(true);
+    expect(
+      isSearchResultsUrl(
+        "https://dianearcherie.com/123-stabilisateur-central.html",
+      ),
+    ).toBe(false);
+  });
+
+  it("reconnaît et nettoie l'URL canonique d'une fiche Shopify", () => {
+    expect(
+      verifiedProductUrl(
+        `
+          <html>
+            <head>
+              <meta property="og:type" content="product">
+              <link rel="canonical" href="/products/compound-pse-lazer-nf?variant=1">
+            </head>
+          </html>
+        `,
+        "https://donutarchery.com/products/compound-pse-lazer-nf?_pos=1",
+        "donutarchery.com",
+      ),
+    ).toBe("https://donutarchery.com/products/compound-pse-lazer-nf");
+  });
+
+  it("rejette une page de recherche même si elle contient des métadonnées produit", () => {
+    expect(
+      verifiedProductUrl(
+        '<meta property="product:price:amount" content="999">',
+        "https://donutarchery.com/search?q=PSE",
+        "donutarchery.com",
+      ),
+    ).toBeNull();
   });
 });
