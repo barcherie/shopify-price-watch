@@ -488,7 +488,9 @@ export async function discoverProductMatch(
   if (!competitor || !competitor.active || competitor.legalStatus !== "APPROVED") {
     throw new Error("Concurrent inactif ou non approuvé.");
   }
-  if (existing) {
+  const existingIsSearchPage =
+    existing && isSearchResultsUrl(existing.url);
+  if (existing && !existingIsSearchPage) {
     return {
       competitorId: competitor.id,
       competitorName: competitor.name,
@@ -514,14 +516,25 @@ export async function discoverProductMatch(
         message: "Recherche accessible, mais aucun candidat suffisamment proche.",
       };
     }
-    await prisma.productMatch.create({
-      data: {
-        productId: product.id,
-        competitorId: competitor.id,
-        url: candidate.url,
-        status: "PENDING",
-      },
-    });
+    if (existingIsSearchPage) {
+      await prisma.productMatch.update({
+        where: { id: existing.id },
+        data: {
+          url: candidate.url,
+          status: "PENDING",
+          lastScrapedAt: null,
+        },
+      });
+    } else {
+      await prisma.productMatch.create({
+        data: {
+          productId: product.id,
+          competitorId: competitor.id,
+          url: candidate.url,
+          status: "PENDING",
+        },
+      });
+    }
     return {
       competitorId: competitor.id,
       competitorName: competitor.name,
