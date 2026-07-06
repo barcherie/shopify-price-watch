@@ -10,11 +10,18 @@ const MAX_CANDIDATE_URLS = 50_000;
 const MINIMUM_SCORE = 0.72;
 const MAX_CANDIDATES_TO_VERIFY = 3;
 const STOP_WORDS = new Set([
+  "archery",
   "avec",
   "chez",
+  "classique",
+  "classiques",
   "dans",
   "des",
   "pour",
+  "product",
+  "products",
+  "produit",
+  "produits",
   "sur",
   "the",
   "une",
@@ -52,17 +59,37 @@ function isSignificantToken(token: string) {
   );
 }
 
+function semanticTokens(value: string) {
+  const normalized = normalize(value);
+  const hasGrandPrix = /\bgrand prix\b/.test(normalized);
+  const mapped = normalized
+    .split(" ")
+    .filter(
+      (token) =>
+        !(hasGrandPrix && (token === "grand" || token === "prix")),
+    )
+    .map((token) => {
+      if (["branche", "branches", "limb", "limbs"].includes(token)) {
+        return "branch";
+      }
+      if (token === "mousse") return "foam";
+      if (["bois", "laminate"].includes(token)) return "wood";
+      if (token === "syntatic") return "syntactic";
+      return token;
+    });
+  if (hasGrandPrix) mapped.push("ilf");
+  return mapped;
+}
+
 function identityTokens(product: ProductIdentity) {
   return Array.from(
     new Set(
-      normalize(`${product.vendor || ""} ${product.title}`)
-        .split(" ")
-        .filter(
-          (token) =>
-            isSignificantToken(token) &&
-            !STOP_WORDS.has(token) &&
-            !/^20\d{2}$/.test(token),
-        ),
+      semanticTokens(`${product.vendor || ""} ${product.title}`).filter(
+        (token) =>
+          isSignificantToken(token) &&
+          !STOP_WORDS.has(token) &&
+          !/^20\d{2}$/.test(token),
+      ),
     ),
   );
 }
@@ -104,7 +131,8 @@ export function scoreProductCandidate(
   candidateLabel = "",
 ) {
   const pathname = decodeURIComponent(new URL(candidateUrl).pathname);
-  const candidate = normalize(candidateLabel || pathname);
+  const expected = normalize(`${product.vendor || ""} ${product.title}`);
+  const candidate = normalize(`${candidateLabel} ${pathname}`);
   const expectedYears: string[] =
     normalize(product.title).match(/\b20\d{2}\b/g) || [];
   const candidateYears: string[] = candidate.match(/\b20\d{2}\b/g) || [];
@@ -115,6 +143,21 @@ export function scoreProductCandidate(
   ) {
     return 0;
   }
+
+  const expectedIlf = /\bilf\b|\bgrand prix\b/.test(expected);
+  const expectedFormula = /\bformula\b/.test(expected);
+  const candidateIlf = /\bilf\b|\bgrand prix\b/.test(candidate);
+  const candidateFormula = /\bformula\b/.test(candidate);
+  if (expectedIlf && candidateFormula && !candidateIlf) return 0;
+  if (expectedFormula && candidateIlf && !candidateFormula) return 0;
+
+  const expectedFoam = /\bfoam\b|\bmousse\b/.test(expected);
+  const expectedWood = /\bwood\b|\bbois\b|\blaminate\b/.test(expected);
+  const candidateFoam = /\bfoam\b|\bmousse\b/.test(candidate);
+  const candidateWood = /\bwood\b|\bbois\b|\blaminate\b/.test(candidate);
+  if (expectedFoam && candidateWood && !candidateFoam) return 0;
+  if (expectedWood && candidateFoam && !candidateWood) return 0;
+
   const normalizedSku = normalize(product.sku || "").replace(/\s/g, "");
   if (
     normalizedSku.length >= 3 &&
@@ -125,11 +168,16 @@ export function scoreProductCandidate(
 
   const tokens = identityTokens(product);
   if (!tokens.length) return 0;
-  const matched = tokens.filter((token) => candidate.includes(token)).length;
-  if (matched < Math.min(2, tokens.length)) return 0;
   const candidateTokens = new Set(
-    candidate.split(" ").filter(isSignificantToken),
+    semanticTokens(candidate).filter(
+      (token) =>
+        isSignificantToken(token) &&
+        !STOP_WORDS.has(token) &&
+        !/^20\d{2}$/.test(token),
+    ),
   );
+  const matched = tokens.filter((token) => candidateTokens.has(token)).length;
+  if (matched < Math.min(2, tokens.length)) return 0;
   const coverage = matched / tokens.length;
   const precision = matched / Math.max(1, candidateTokens.size);
   return coverage * 0.8 + precision * 0.2;

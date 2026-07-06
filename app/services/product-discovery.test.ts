@@ -98,6 +98,78 @@ describe("product discovery", () => {
     ).toBe(0);
   });
 
+  it("comprend que Grand Prix et ILF désignent le même montage", () => {
+    const product = {
+      title: "Branches Hoyt Metrix Grand prix ILF",
+      vendor: "Hoyt",
+      sku: null,
+    };
+    const candidates = [
+      [
+        "https://example.com/branches-formula-ou-grand-prix-metrix-foam-hoyt-archery",
+        "Branches Formula ou grand prix Metrix Foam - HOYT Archery",
+      ],
+      [
+        "https://example.com/hoyt-branches-metrix-ilf-syntactic-foam",
+        "HOYT - Branches METRIX ILF Syntactic Foam",
+      ],
+      [
+        "https://example.com/branches-hoyt-grand-prix-ilf-carbon-metrix-syntactic-foam-core-2026",
+        "Branches Hoyt Grand Prix ILF Carbon Metrix Syntactic Foam Core 2026",
+      ],
+      [
+        "https://example.com/products/branche-hoyt-syntactic-foam-metrix",
+        "Branche Hoyt Syntactic Foam Metrix",
+      ],
+      [
+        "https://example.com/hoyt-limbs-grand-prix-syntactic-foam-metrix",
+        "Hoyt Limbs Grand Prix Syntactic Foam Metrix",
+      ],
+      [
+        "https://example.com/branches-classiques/hoyt-metrix",
+        "Hoyt Metrix branches classique",
+      ],
+      [
+        "https://example.com/branches-hoyt-grand-prix-metrix-syntatic-foam-core-2026",
+        "Branches HOYT Grand Prix Metrix Syntatic Foam Core - 2026",
+      ],
+    ];
+
+    for (const [url, label] of candidates) {
+      expect(scoreProductCandidate(product, url, label)).toBeGreaterThanOrEqual(
+        0.72,
+      );
+    }
+  });
+
+  it("rejette une version Formula lorsque le produit demandé est ILF", () => {
+    expect(
+      scoreProductCandidate(
+        {
+          title: "Branches Hoyt Metrix Grand prix ILF",
+          vendor: "Hoyt",
+          sku: null,
+        },
+        "https://example.com/hoyt-branches-metrix-formula-foam",
+        "Hoyt Branches Metrix Formula Foam",
+      ),
+    ).toBe(0);
+  });
+
+  it("rejette un cœur bois lorsque le produit demandé est mousse", () => {
+    expect(
+      scoreProductCandidate(
+        {
+          title: "Branches Hoyt Metrix ILF Syntactic Foam",
+          vendor: "Hoyt",
+          sku: null,
+        },
+        "https://example.com/hoyt-limbs-grand-prix-laminate-core-metrix",
+        "Hoyt Limbs Grand Prix Laminate Core Metrix",
+      ),
+    ).toBe(0);
+  });
+
   it("extrait les URLs XML et les sitemaps déclarés", () => {
     expect(
       extractSitemapLocations(
