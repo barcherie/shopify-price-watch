@@ -190,3 +190,30 @@
   background: #f2f8fc;
   margin-bottom: 16px;
 }
+
+.pw-url-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pw-action-button {
+  min-height: 32px;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.pw-action-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.pw-action-button--warning {
+  background: #f59e0b;
+  color: #1f2937;
+}

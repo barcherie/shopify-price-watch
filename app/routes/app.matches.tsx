@@ -19,28 +19,10 @@ import {
 } from "../services/product-discovery.server";
 import { validateTargetUrl } from "../services/url-safety.server";
 
-const MATCH_STATUS_LABELS = {
-  PENDING: "À vérifier",
-  VALIDATED: "Validée",
-  REJECTED: "Rejetée",
-} as const;
-
-const MATCH_STATUS_TONES = {
-  PENDING: "warning",
-  VALIDATED: "success",
-  REJECTED: "critical",
-} as const;
-
 const LEGAL_STATUS_LABELS = {
   PENDING: "Juridique à vérifier",
   APPROVED: "Collecte autorisée",
   BLOCKED: "Collecte bloquée",
-} as const;
-
-const LEGAL_STATUS_TONES = {
-  PENDING: "warning",
-  APPROVED: "success",
-  BLOCKED: "critical",
 } as const;
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -883,8 +865,7 @@ export default function MatchesPage() {
                 <s-table-header>URL</s-table-header>
                 <s-table-header>Dernier prix</s-table-header>
                 <s-table-header>Dernier test</s-table-header>
-                <s-table-header listSlot="secondary">Statut</s-table-header>
-                <s-table-header>Actions</s-table-header>
+                <s-table-header listSlot="secondary">Actions</s-table-header>
               </s-table-header-row>
               <s-table-body>
                 {group.matches.map((match) => {
@@ -896,19 +877,14 @@ export default function MatchesPage() {
                   return (
                     <s-table-row key={match.id}>
                       <s-table-cell>
-                        <s-stack gap="small-200">
-                          <s-text type="strong">{match.competitor}</s-text>
-                          <s-badge
-                            tone={LEGAL_STATUS_TONES[match.legalStatus]}
-                          >
-                            {LEGAL_STATUS_LABELS[match.legalStatus]}
-                          </s-badge>
-                        </s-stack>
+                        <s-text type="strong">{match.competitor}</s-text>
                       </s-table-cell>
                       <s-table-cell>
                         <s-stack gap="small-200">
                           <s-link href={match.url} target="_blank">
-                            Ouvrir la page produit
+                            <span className="pw-url-link" title="Ouvrir l’URL">
+                              🔗 URL
+                            </span>
                           </s-link>
                           {match.searchQuery && (
                             <s-text color="subdued">
@@ -993,11 +969,6 @@ export default function MatchesPage() {
                         )}
                       </s-table-cell>
                       <s-table-cell>
-                        <s-badge tone={MATCH_STATUS_TONES[match.status]}>
-                          {MATCH_STATUS_LABELS[match.status]}
-                        </s-badge>
-                      </s-table-cell>
-                      <s-table-cell>
                         <s-stack direction="inline" gap="small-200">
                           <s-button
                             variant="tertiary"
@@ -1012,7 +983,8 @@ export default function MatchesPage() {
                               id={match.id}
                               intent="status"
                               status="VALIDATED"
-                              label="Valider"
+                              label="À valider"
+                              warning
                             />
                           )}
                           {match.status !== "REJECTED" && (
@@ -1261,6 +1233,7 @@ function MatchAction({
   tone,
   icon,
   disabled = false,
+  warning = false,
 }: {
   id: string;
   intent: "status" | "scrape" | "delete";
@@ -1269,12 +1242,22 @@ function MatchAction({
   tone?: "critical";
   icon?: "refresh" | "delete";
   disabled?: boolean;
+  warning?: boolean;
 }) {
   return (
     <Form method="post">
       <input type="hidden" name="intent" value={intent} />
       <input type="hidden" name="id" value={id} />
       {status && <input type="hidden" name="status" value={status} />}
+      {warning ? (
+        <button
+          type="submit"
+          className="pw-action-button pw-action-button--warning"
+          disabled={disabled}
+        >
+          {label}
+        </button>
+      ) : (
       <s-button
         type="submit"
         variant="tertiary"
@@ -1284,6 +1267,7 @@ function MatchAction({
       >
         {label}
       </s-button>
+      )}
     </Form>
   );
 }
