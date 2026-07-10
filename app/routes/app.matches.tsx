@@ -89,34 +89,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       include: {
         competitor: true,
         product: true,
+        observations: {
+          where: { success: true, price: { not: null } },
+          orderBy: { observedAt: "desc" },
+          take: 2,
+        },
       },
       orderBy: { updatedAt: "desc" },
       take: 250,
     }),
   ]);
   const matchIds = matches.map((match) => match.id);
-  const [latestSuccessfulPrices, latestAttempts] = await Promise.all([
-    prisma.priceObservation.findMany({
-      where: {
-        matchId: { in: matchIds },
-        success: true,
-        price: { not: null },
-      },
-      orderBy: { observedAt: "desc" },
-      distinct: ["matchId"],
-    }),
-    prisma.priceObservation.findMany({
-      where: { matchId: { in: matchIds } },
-      orderBy: { observedAt: "desc" },
-      distinct: ["matchId"],
-    }),
-  ]);
-  const priceByMatch = new Map(
-    latestSuccessfulPrices.map((observation) => [
-      observation.matchId,
-      observation,
-    ]),
-  );
+  const latestAttempts = await prisma.priceObservation.findMany({
+    where: { matchId: { in: matchIds } },
+    orderBy: { observedAt: "desc" },
+    distinct: ["matchId"],
+  });
   const attemptByMatch = new Map(
     latestAttempts.map((observation) => [
       observation.matchId,
@@ -139,7 +127,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       : null,
     competitors,
     matches: matches.map((match) => {
-      const latestPrice = priceByMatch.get(match.id);
+      const latestPrice = match.observations[0];
+      const previousPrice = match.observations[1];
       const latestAttempt = attemptByMatch.get(match.id);
       return {
         id: match.id,
@@ -163,6 +152,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
               price: latestPrice.price?.toString() || null,
               currencyCode: latestPrice.currencyCode,
               observedAt: latestPrice.observedAt.toISOString(),
+            }
+          : null,
+        previousPrice: previousPrice
+          ? {
+              price: previousPrice.price?.toString() || null,
+              currencyCode: previousPrice.currencyCode,
+              observedAt: previousPrice.observedAt.toISOString(),
             }
           : null,
         latestAttempt: latestAttempt
@@ -893,6 +889,10 @@ export default function MatchesPage() {
               <s-table-body>
                 {group.matches.map((match) => {
                   const editModalId = `edit-match-${match.id}`;
+                  const trend = priceTrend(
+                    match.latestPrice?.price,
+                    match.previousPrice?.price,
+                  );
                   return (
                     <s-table-row key={match.id}>
                       <s-table-cell>
@@ -920,12 +920,33 @@ export default function MatchesPage() {
                       <s-table-cell>
                         <s-stack gap="small-200">
                           <s-text>
-                            {match.latestPrice?.price
-                              ? `${match.latestPrice.price} ${
-                                  match.latestPrice.currencyCode || ""
-                                }`
-                              : "Aucun prix relevé"}
+                            {match.latestPrice?.price ? (
+                              <>
+                                {match.latestPrice.price}{" "}
+                                {match.latestPrice.currencyCode || ""}
+                                {trend && (
+                                  <span
+                                    title={trend.label}
+                                    style={{
+                                      color: trend.color,
+                                      fontWeight: 700,
+                                      marginLeft: 6,
+                                    }}
+                                  >
+                                    {trend.icon}
+                                  </span>
+                                )}
+                              </>
+                            ) : (
+                              "Aucun prix relevé"
+                            )}
                           </s-text>
+                          {match.previousPrice?.price && (
+                            <s-text color="subdued">
+                              Ancien : {match.previousPrice.price}{" "}
+                              {match.previousPrice.currencyCode || ""}
+                            </s-text>
+                          )}
                           {match.latestPrice && (
                             <s-text color="subdued">
                               {new Date(
@@ -1058,6 +1079,35 @@ type MatchRow = ReturnType<
 type CompetitorRow = ReturnType<
   typeof useLoaderData<typeof loader>
 >["competitors"][number];
+
+function priceTrend(
+  currentPrice: string | null | undefined,
+  previousPrice: string | null | undefined,
+) {
+  if (!currentPrice || !previousPrice) return null;
+  const current = Number(currentPrice);
+  const previous = Number(previousPrice);
+  if (!Number.isFinite(current) || !Number.isFinite(previous)) return null;
+  if (current > previous) {
+    return {
+      icon: "↗",
+      label: "Prix en hausse",
+      color: "#108043",
+    };
+  }
+  if (current < previous) {
+    return {
+      icon: "↘",
+      label: "Prix en baisse",
+      color: "#bf0711",
+    };
+  }
+  return {
+    icon: "—",
+    label: "Prix stable",
+    color: "#b7791f",
+  };
+}
 
 function AddCompetitorModal({
   modalId,
