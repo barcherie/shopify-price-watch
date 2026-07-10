@@ -35,6 +35,7 @@ describe("buildBenchmarkRows", () => {
             status: "REJECTED",
             competitorName: "Concurrent",
             price: 90,
+            previousPrice: null,
             currencyCode: "EUR",
             observedAt: new Date(),
           },
@@ -50,6 +51,7 @@ describe("buildBenchmarkRows", () => {
           status: "VALIDATED",
           competitorName: "Concurrent",
           price: 90,
+          previousPrice: 95,
           currencyCode: "EUR",
           observedAt: new Date("2026-07-03"),
         },
@@ -57,6 +59,7 @@ describe("buildBenchmarkRows", () => {
     ]);
     expect(rows).toHaveLength(1);
     expect(rows[0].bestCompetitorName).toBe("Concurrent");
+    expect(rows[0].bestCompetitorTrend).toBe("DOWN");
   });
 });
 

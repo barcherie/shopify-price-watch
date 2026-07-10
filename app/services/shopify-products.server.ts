@@ -19,6 +19,13 @@ type ShopifyProductNode = {
   updatedAt: string;
   category: { name: string } | null;
   featuredImage: { url: string; altText: string | null } | null;
+  media: {
+    nodes: Array<{
+      preview: {
+        image: { url: string; altText: string | null } | null;
+      } | null;
+    }>;
+  };
   variants: {
     nodes: Array<{
       id: string;
@@ -42,6 +49,13 @@ const PRODUCT_FIELDS = `#graphql
     updatedAt
     category { name }
     featuredImage { url altText }
+    media(first: 1) {
+      nodes {
+        preview {
+          image { url altText }
+        }
+      }
+    }
     variants(first: 1) {
       nodes { id title sku price }
     }
@@ -70,6 +84,8 @@ async function persistProduct(
   currencyCode: string,
 ) {
   const firstVariant = product.variants.nodes[0] || null;
+  const fallbackImage = product.media.nodes[0]?.preview?.image || null;
+  const image = product.featuredImage || fallbackImage;
   const now = new Date();
 
   return prisma.shopifyProduct.upsert({
@@ -80,8 +96,8 @@ async function persistProduct(
       vendor: product.vendor || null,
       productType: product.productType || null,
       categoryName: product.category?.name || null,
-      featuredImageUrl: product.featuredImage?.url || null,
-      featuredImageAlt: product.featuredImage?.altText || null,
+      featuredImageUrl: image?.url || null,
+      featuredImageAlt: image?.altText || null,
       onlineStoreUrl: product.onlineStoreUrl,
       status: product.status,
       firstVariantShopifyId: firstVariant?.id || null,
@@ -100,8 +116,8 @@ async function persistProduct(
       vendor: product.vendor || null,
       productType: product.productType || null,
       categoryName: product.category?.name || null,
-      featuredImageUrl: product.featuredImage?.url || null,
-      featuredImageAlt: product.featuredImage?.altText || null,
+      featuredImageUrl: image?.url || null,
+      featuredImageAlt: image?.altText || null,
       onlineStoreUrl: product.onlineStoreUrl,
       status: product.status,
       firstVariantShopifyId: firstVariant?.id || null,

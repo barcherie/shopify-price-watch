@@ -141,6 +141,19 @@ function money(value: number | null, currencyCode = "EUR") {
   }).format(value);
 }
 
+function priceTrend(trend: BenchmarkRow["bestCompetitorTrend"]) {
+  if (trend === "UP") {
+    return { icon: "↗", label: "Prix en hausse", color: "#108043" };
+  }
+  if (trend === "DOWN") {
+    return { icon: "↘", label: "Prix en baisse", color: "#bf0711" };
+  }
+  if (trend === "STABLE") {
+    return { icon: "—", label: "Prix stable", color: "#b7791f" };
+  }
+  return null;
+}
+
 export default function Dashboard() {
   const { rows, vendors, filters, pagination, summary } =
     useLoaderData<typeof loader>();
@@ -276,7 +289,9 @@ export default function Dashboard() {
               <s-table-header listSlot="secondary">Statut</s-table-header>
             </s-table-header-row>
             <s-table-body>
-              {rows.map((row) => (
+              {rows.map((row) => {
+                const trend = priceTrend(row.bestCompetitorTrend);
+                return (
                 <s-table-row key={row.productId}>
                   <s-table-cell>
                     <s-stack direction="inline" gap="base" alignItems="center">
@@ -306,7 +321,32 @@ export default function Dashboard() {
                     {row.bestCompetitorName || "En attente de relevé"}
                   </s-table-cell>
                   <s-table-cell>
-                    {money(row.bestCompetitorPrice, row.currencyCode)}
+                    <s-stack gap="small-200">
+                      <s-text>
+                        {money(row.bestCompetitorPrice, row.currencyCode)}
+                        {trend && (
+                          <span
+                            title={trend.label}
+                            style={{
+                              color: trend.color,
+                              fontWeight: 700,
+                              marginLeft: 6,
+                            }}
+                          >
+                            {trend.icon}
+                          </span>
+                        )}
+                      </s-text>
+                      {row.bestCompetitorPreviousPrice !== null && (
+                        <s-text color="subdued">
+                          Ancien :{" "}
+                          {money(
+                            row.bestCompetitorPreviousPrice,
+                            row.currencyCode,
+                          )}
+                        </s-text>
+                      )}
+                    </s-stack>
                   </s-table-cell>
                   <s-table-cell>
                     {money(row.differenceAmount, row.currencyCode)}
@@ -322,7 +362,8 @@ export default function Dashboard() {
                     </s-badge>
                   </s-table-cell>
                 </s-table-row>
-              ))}
+              );
+              })}
             </s-table-body>
           </s-table>
         )}

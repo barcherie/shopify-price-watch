@@ -15,6 +15,7 @@ export type BenchmarkInput = {
     status: "PENDING" | "VALIDATED" | "REJECTED";
     competitorName: string;
     price: number | null;
+    previousPrice: number | null;
     currencyCode: string | null;
     observedAt: Date | null;
   }>;
@@ -30,6 +31,8 @@ export type BenchmarkRow = {
   shopifyPrice: number;
   currencyCode: string;
   bestCompetitorPrice: number | null;
+  bestCompetitorPreviousPrice: number | null;
+  bestCompetitorTrend: "UP" | "DOWN" | "STABLE" | null;
   bestCompetitorName: string | null;
   competitorNames: string[];
   differenceAmount: number | null;
@@ -70,6 +73,15 @@ export function buildBenchmarkRows(products: BenchmarkInput[]): BenchmarkRow[] {
       .sort((a, b) => (a.price || 0) - (b.price || 0));
     const best = observations[0] || null;
     const bestPrice = best?.price ?? null;
+    const bestPreviousPrice = best?.previousPrice ?? null;
+    const bestTrend =
+      bestPrice === null || bestPreviousPrice === null
+        ? null
+        : bestPrice > bestPreviousPrice
+          ? "UP"
+          : bestPrice < bestPreviousPrice
+            ? "DOWN"
+            : "STABLE";
     const differenceAmount =
       bestPrice === null ? null : product.shopifyPrice - bestPrice;
     const differencePercent =
@@ -88,6 +100,8 @@ export function buildBenchmarkRows(products: BenchmarkInput[]): BenchmarkRow[] {
         shopifyPrice: product.shopifyPrice,
         currencyCode: product.currencyCode,
         bestCompetitorPrice: bestPrice,
+        bestCompetitorPreviousPrice: bestPreviousPrice,
+        bestCompetitorTrend: bestTrend,
         bestCompetitorName: best?.competitorName ?? null,
         competitorNames: validatedMatches.map((match) => match.competitorName),
         differenceAmount,
@@ -128,7 +142,7 @@ export async function getBenchmarkRows(): Promise<BenchmarkRow[]> {
           observations: {
             where: { success: true, price: { not: null } },
             orderBy: { observedAt: "desc" },
-            take: 1,
+            take: 2,
           },
         },
       },
@@ -151,6 +165,9 @@ export async function getBenchmarkRows(): Promise<BenchmarkRow[]> {
         competitorName: match.competitor.name,
         price: match.observations[0]?.price
           ? Number(match.observations[0].price)
+          : null,
+        previousPrice: match.observations[1]?.price
+          ? Number(match.observations[1].price)
           : null,
         currencyCode: match.observations[0]?.currencyCode || null,
         observedAt: match.observations[0]?.observedAt || null,

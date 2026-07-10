@@ -5,6 +5,8 @@ import {
   useActionData,
   useFetcher,
   useLoaderData,
+  useLocation,
+  useNavigate,
   useNavigation,
 } from "react-router";
 import type { ProductMatchStatus } from "@prisma/client";
@@ -25,6 +27,8 @@ const LEGAL_STATUS_LABELS = {
   BLOCKED: "Collecte bloquée",
 } as const;
 
+const MATCHES_PAGE_SIZE = 50;
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
   const url = new URL(request.url);
@@ -32,42 +36,48 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     url.searchParams.get("product") || url.searchParams.get("variant") || "";
   const query = url.searchParams.get("q")?.trim() || "";
   const status = url.searchParams.get("status") || "";
+  const page = Math.max(1, Number(url.searchParams.get("page") || 1));
+  const matchWhere = {
+    ...(status ? { status: status as ProductMatchStatus } : undefined),
+    ...(query
+      ? {
+          OR: [
+            {
+              product: {
+                title: { contains: query, mode: "insensitive" as const },
+              },
+            },
+            {
+              product: {
+                vendor: { contains: query, mode: "insensitive" as const },
+              },
+            },
+            {
+              competitor: {
+                name: { contains: query, mode: "insensitive" as const },
+              },
+            },
+            {
+              searchQuery: { contains: query, mode: "insensitive" as const },
+            },
+          ],
+        }
+      : undefined),
+  };
 
-  const [initialProduct, competitors, matches] = await Promise.all([
+  const [initialProduct, competitors, totalMatches] = await Promise.all([
     selectedProductId
       ? prisma.shopifyProduct.findUnique({
           where: { id: selectedProductId },
         })
       : null,
     prisma.competitor.findMany({ orderBy: { name: "asc" } }),
-    prisma.productMatch.findMany({
-      where: {
-        ...(status ? { status: status as ProductMatchStatus } : undefined),
-        ...(query
-          ? {
-              OR: [
-                {
-                  product: {
-                    title: { contains: query, mode: "insensitive" },
-                  },
-                },
-                {
-                  product: {
-                    vendor: { contains: query, mode: "insensitive" },
-                  },
-                },
-                {
-                  competitor: {
-                    name: { contains: query, mode: "insensitive" },
-                  },
-                },
-                {
-                  searchQuery: { contains: query, mode: "insensitive" },
-                },
-              ],
-            }
-          : undefined),
-      },
+    prisma.productMatch.count({ where: matchWhere }),
+  ]);
+  const totalPages = Math.max(1, Math.ceil(totalMatches / MATCHES_PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const matches = await prisma.productMatch.findMany({
+      where: matchWhere,
       include: {
         competitor: true,
         product: true,
@@ -78,9 +88,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         },
       },
       orderBy: { updatedAt: "desc" },
-      take: 250,
-    }),
-  ]);
+      skip: (safePage - 1) * MATCHES_PAGE_SIZE,
+      take: MATCHES_PAGE_SIZE,
+    });
   const matchIds = matches.map((match) => match.id);
   const latestAttempts = await prisma.priceObservation.findMany({
     where: { matchId: { in: matchIds } },
@@ -96,6 +106,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return {
     filters: { query, status },
+    pagination: {
+      page: safePage,
+      totalPages,
+      total: totalMatches,
+      hasPreviousPage: safePage > 1,
+      hasNextPage: safePage < totalPages,
+    },
     initialProduct: initialProduct
       ? {
           shopifyId: initialProduct.shopifyId,
@@ -397,11 +414,13 @@ type PickedProduct = {
 };
 
 export default function MatchesPage() {
-  const { competitors, matches, initialProduct, filters } =
+  const { competitors, matches, initialProduct, filters, pagination } =
     useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const discoveryFetcher = useFetcher<typeof action>();
   const navigation = useNavigation();
+  const navigate = useNavigate();
+  const location = useLocation();
   const shopify = useAppBridge();
   const [pickedProduct, setPickedProduct] = useState<PickedProduct | null>(
     initialProduct,
@@ -426,6 +445,12 @@ export default function MatchesPage() {
     results: [],
   });
   const busy = navigation.state !== "idle" || discoveryState.running;
+
+  function goToPage(page: number) {
+    const params = new URLSearchParams(location.search);
+    params.set("page", String(page));
+    navigate(`${location.pathname}?${params}`);
+  }
 
   useEffect(() => {
     if (actionData?.message) {
@@ -787,7 +812,11 @@ export default function MatchesPage() {
         </s-stack>
       </s-section>
 
-      <s-section heading="Correspondances enregistrées">
+      <s-section
+        heading={`Correspondances enregistrées · ${pagination.total.toLocaleString(
+          "fr-FR",
+        )} ligne(s)`}
+      >
         <Form method="get">
           <s-grid
             gap="small-200"
@@ -817,6 +846,34 @@ export default function MatchesPage() {
             </s-button>
           </s-grid>
         </Form>
+        {pagination.totalPages > 1 && (
+          <s-stack
+            direction="inline"
+            gap="small-200"
+            alignItems="center"
+            justifyContent="end"
+          >
+            <s-button
+              type="button"
+              variant="secondary"
+              disabled={!pagination.hasPreviousPage}
+              onClick={() => goToPage(pagination.page - 1)}
+            >
+              Précédent
+            </s-button>
+            <s-text color="subdued">
+              Page {pagination.page}/{pagination.totalPages}
+            </s-text>
+            <s-button
+              type="button"
+              variant="secondary"
+              disabled={!pagination.hasNextPage}
+              onClick={() => goToPage(pagination.page + 1)}
+            >
+              Suivant
+            </s-button>
+          </s-stack>
+        )}
       </s-section>
 
       {productGroups.map((group) => {
