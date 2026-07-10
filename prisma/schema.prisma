@@ -133,6 +133,7 @@ model ProductMatch {
   productId     String
   competitorId  String
   url           String
+  searchQuery   String?
   status        ProductMatchStatus @default(PENDING)
   lastScrapedAt DateTime?
   createdAt     DateTime           @default(now())

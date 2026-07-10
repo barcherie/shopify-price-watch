@@ -79,6 +79,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
                     name: { contains: query, mode: "insensitive" },
                   },
                 },
+                {
+                  searchQuery: { contains: query, mode: "insensitive" },
+                },
               ],
             }
           : undefined),
@@ -151,6 +154,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         competitorId: match.competitor.id,
         competitor: match.competitor.name,
         url: match.url,
+        searchQuery: match.searchQuery,
         status: match.status,
         legalStatus: match.competitor.legalStatus,
         active: match.competitor.active,
@@ -183,6 +187,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (intent === "discoverOne") {
       const productShopifyId = String(formData.get("productShopifyId") || "");
       const competitorId = String(formData.get("competitorId") || "");
+      const searchQuery =
+        String(formData.get("searchQuery") || "").trim() || null;
       const product = await prisma.shopifyProduct.findUnique({
         where: { shopifyId: productShopifyId },
       });
@@ -196,6 +202,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const discoveryResult = await discoverProductMatch(
         product.id,
         competitorId,
+        searchQuery,
       );
       return {
         ok: discoveryResult.status !== "ERROR",
@@ -207,6 +214,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (intent === "discover") {
       const productShopifyId = String(formData.get("productShopifyId") || "");
       const productId = String(formData.get("productId") || "");
+      const searchQuery =
+        String(formData.get("searchQuery") || "").trim() || null;
       const product = productId
         ? await prisma.shopifyProduct.findUnique({ where: { id: productId } })
         : await prisma.shopifyProduct.findUnique({
@@ -219,7 +228,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             "Produit introuvable. Synchronisez Shopify puis réessayez.",
         };
       }
-      const results = await discoverProductMatches(product.id);
+      const results = await discoverProductMatches(product.id, searchQuery);
       const found = results.filter((result) => result.status === "FOUND").length;
       const missing = results.filter(
         (result) => result.status === "NOT_FOUND",
@@ -273,11 +282,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         String(formData.get("url") || ""),
         competitor.domain,
       ).toString();
+      const searchQuery =
+        String(formData.get("searchQuery") || "").trim() || null;
       await prisma.productMatch.create({
         data: {
           productId: product.id,
           competitorId,
           url,
+          searchQuery,
         },
       });
       return {
@@ -353,6 +365,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         String(formData.get("url") || ""),
         competitor.domain,
       ).toString();
+      const searchQuery =
+        String(formData.get("searchQuery") || "").trim() || null;
       const targetChanged =
         match.competitorId !== competitorId || match.url !== url;
       await prisma.productMatch.update({
@@ -360,6 +374,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         data: {
           competitorId,
           url,
+          searchQuery,
           status,
           ...(targetChanged ? { lastScrapedAt: null } : {}),
         },
@@ -413,6 +428,7 @@ export default function MatchesPage() {
   const [pickedProduct, setPickedProduct] = useState<PickedProduct | null>(
     initialProduct,
   );
+  const [searchQuery, setSearchQuery] = useState("");
   const discoveryQueue = useRef<typeof competitors>([]);
   const discoveryIndex = useRef(0);
   const discoveryProductId = useRef("");
@@ -477,6 +493,7 @@ export default function MatchesPage() {
           intent: "discoverOne",
           productShopifyId: discoveryProductId.current,
           competitorId: nextCompetitor.id,
+          searchQuery,
         },
         { method: "POST" },
       );
@@ -597,6 +614,7 @@ export default function MatchesPage() {
         intent: "discoverOne",
         productShopifyId: pickedProduct.shopifyId,
         competitorId: queue[0].id,
+        searchQuery,
       },
       { method: "POST" },
     );
@@ -657,6 +675,19 @@ export default function MatchesPage() {
             Price Watch analysera les sitemaps publics des concurrents approuvés.
             Les URLs trouvées seront ajoutées « À vérifier ».
           </s-banner>
+
+          <s-text-field
+            label="Requête de recherche"
+            value={searchQuery}
+            onInput={(event) =>
+              setSearchQuery(
+                (event.currentTarget as unknown as HTMLInputElement).value,
+              )
+            }
+            placeholder="Ex. Hoyt Metrix ILF Foam"
+            details="Optionnel : si ce champ est rempli, Price Watch l’utilise en priorité pour la recherche automatique."
+            disabled={discoveryState.running}
+          />
 
           <s-button
             type="button"
@@ -741,6 +772,7 @@ export default function MatchesPage() {
               name="productShopifyId"
               value={pickedProduct?.shopifyId || ""}
             />
+            <input type="hidden" name="searchQuery" value={searchQuery} />
             <s-grid
               gap="base"
               gridTemplateColumns="@container (inline-size > 700px) 1fr 1fr auto"
@@ -874,9 +906,16 @@ export default function MatchesPage() {
                         </s-stack>
                       </s-table-cell>
                       <s-table-cell>
-                        <s-link href={match.url} target="_blank">
-                          Ouvrir la page produit
-                        </s-link>
+                        <s-stack gap="small-200">
+                          <s-link href={match.url} target="_blank">
+                            Ouvrir la page produit
+                          </s-link>
+                          {match.searchQuery && (
+                            <s-text color="subdued">
+                              Requête : {match.searchQuery}
+                            </s-text>
+                          )}
+                        </s-stack>
                       </s-table-cell>
                       <s-table-cell>
                         <s-stack gap="small-200">
@@ -1062,6 +1101,12 @@ function AddCompetitorModal({
               required
               placeholder="https://concurrent.fr/produit"
             />
+            <s-text-field
+              label="Requête de recherche"
+              name="searchQuery"
+              placeholder="Ex. Hoyt Metrix ILF Foam"
+              details="Optionnel : utile si vous relancez une recherche automatique plus tard."
+            />
             <s-stack direction="inline" justifyContent="end" gap="small">
               <s-button type="button" commandFor={modalId} command="--hide">
                 Annuler
@@ -1126,6 +1171,13 @@ function EditMatchModal({
             name="url"
             value={match.url}
             required
+          />
+          <s-text-field
+            label="Requête de recherche"
+            name="searchQuery"
+            value={match.searchQuery || ""}
+            placeholder="Ex. Hoyt Metrix ILF Foam"
+            details="Optionnel : l’app l’utilise pour guider la recherche automatique."
           />
           <s-select
             label="Statut"

@@ -32,6 +32,7 @@ type ProductIdentity = {
   title: string;
   vendor: string | null;
   sku: string | null;
+  searchQuery?: string | null;
 };
 
 export type DiscoveryResult = {
@@ -95,6 +96,7 @@ function identityTokens(product: ProductIdentity) {
 }
 
 export function buildSearchQueries(product: ProductIdentity) {
+  const manualQuery = product.searchQuery?.trim();
   const title = product.title.replace(/[–—]/g, " ").replace(/\s+/g, " ").trim();
   const withoutYear = title
     .replace(/\b20\d{2}\b/g, " ")
@@ -107,6 +109,7 @@ export function buildSearchQueries(product: ProductIdentity) {
     .join(" ")
     .trim();
   const queries = [
+    manualQuery,
     product.sku?.trim(),
     title,
     withoutYear,
@@ -524,6 +527,7 @@ async function politeFetch(url: string, domain: string) {
 export async function discoverProductMatch(
   productId: string,
   competitorId: string,
+  searchQuery?: string | null,
 ): Promise<DiscoveryResult> {
   const [product, competitor, existing] = await Promise.all([
     prisma.shopifyProduct.findUnique({ where: { id: productId } }),
@@ -552,6 +556,7 @@ export async function discoverProductMatch(
         title: product.title,
         vendor: product.vendor,
         sku: product.firstVariantSku,
+        searchQuery,
       },
       competitor,
       politeFetch,
@@ -569,6 +574,7 @@ export async function discoverProductMatch(
         where: { id: existing.id },
         data: {
           url: candidate.url,
+          searchQuery: searchQuery?.trim() || existing.searchQuery,
           status: "PENDING",
           lastScrapedAt: null,
         },
@@ -579,6 +585,7 @@ export async function discoverProductMatch(
           productId: product.id,
           competitorId: competitor.id,
           url: candidate.url,
+          searchQuery: searchQuery?.trim() || null,
           status: "PENDING",
         },
       });
@@ -600,14 +607,19 @@ export async function discoverProductMatch(
   }
 }
 
-export async function discoverProductMatches(productId: string) {
+export async function discoverProductMatches(
+  productId: string,
+  searchQuery?: string | null,
+) {
   const competitors = await prisma.competitor.findMany({
     where: { active: true, legalStatus: "APPROVED" },
     orderBy: { name: "asc" },
   });
   const results: DiscoveryResult[] = [];
   for (const competitor of competitors) {
-    results.push(await discoverProductMatch(productId, competitor.id));
+    results.push(
+      await discoverProductMatch(productId, competitor.id, searchQuery),
+    );
   }
   return results;
 }
