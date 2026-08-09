@@ -335,17 +335,31 @@ export async function processDiscoveryQueue(options?: {
   batchSize?: number;
   logger?: DiscoveryQueueLogger;
 }) {
-  const lockToken = await acquireLock();
   const batchSize = Math.min(
     10,
     Math.max(1, options?.batchSize || DEFAULT_BATCH_SIZE),
   );
   const logger = options?.logger;
+  const staleThreshold = new Date(Date.now() - STALE_RUNNING_JOB_MS);
+  const pendingWork = await prisma.discoveryJob.count({
+    where: {
+      run: { status: "RUNNING" },
+      OR: [
+        { status: "PENDING" },
+        { status: "RUNNING", startedAt: { lt: staleThreshold } },
+      ],
+    },
+  });
+  if (pendingWork === 0) {
+    logger?.("Aucun produit en attente.");
+    return { processed: 0, runIds: [] };
+  }
+
+  const lockToken = await acquireLock();
   const touchedRuns = new Set<string>();
   let processed = 0;
 
   try {
-    const staleThreshold = new Date(Date.now() - STALE_RUNNING_JOB_MS);
     const recoveredJobs = await prisma.discoveryJob.updateMany({
       where: {
         status: "RUNNING",
