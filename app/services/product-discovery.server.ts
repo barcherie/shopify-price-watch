@@ -23,10 +23,12 @@ const STOP_WORDS = new Set([
   "products",
   "produit",
   "produits",
+  "star",
   "sur",
   "the",
   "une",
   "version",
+  "xml",
 ]);
 
 type ProductIdentity = {
@@ -61,6 +63,14 @@ function isSignificantToken(token: string) {
   );
 }
 
+function isIgnoredDiscoveryToken(token: string) {
+  return (
+    STOP_WORDS.has(token) ||
+    /^20\d{2}$/.test(token) ||
+    (/^\d+$/.test(token) && token.length >= 3)
+  );
+}
+
 function semanticTokens(value: string) {
   const normalized = normalize(value);
   const hasGrandPrix = /\bgrand prix\b/.test(normalized);
@@ -78,6 +88,12 @@ function semanticTokens(value: string) {
       if (["bois", "laminate"].includes(token)) return "wood";
       if (token === "syntatic") return "syntactic";
       return token;
+    })
+    .flatMap((token) => {
+      if (/^[a-z]{2,4}x$/.test(token)) {
+        return [token, token.slice(0, -1), "x"];
+      }
+      return [token];
     });
   if (hasGrandPrix) mapped.push("ilf");
   return mapped;
@@ -89,8 +105,7 @@ function identityTokens(product: ProductIdentity) {
       semanticTokens(`${product.vendor || ""} ${product.title}`).filter(
         (token) =>
           isSignificantToken(token) &&
-          !STOP_WORDS.has(token) &&
-          !/^20\d{2}$/.test(token),
+          !isIgnoredDiscoveryToken(token),
       ),
     ),
   );
@@ -176,8 +191,7 @@ export function scoreProductCandidate(
     semanticTokens(candidate).filter(
       (token) =>
         isSignificantToken(token) &&
-        !STOP_WORDS.has(token) &&
-        !/^20\d{2}$/.test(token),
+        !isIgnoredDiscoveryToken(token),
     ),
   );
   const matched = tokens.filter((token) => candidateTokens.has(token)).length;

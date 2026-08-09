@@ -170,6 +170,27 @@ describe("product discovery", () => {
     ).toBe(0);
   });
 
+  it("retrouve les codes produits collés dans les URLs Star Archerie", () => {
+    const product = {
+      title: 'Poignée Wiawis ATF-X 25"',
+      vendor: "Wiawis",
+      sku: null,
+    };
+    expect(
+      scoreProductCandidate(
+        product,
+        "https://www.star-archerie.com/poignee-classique-atfx-wiawis-archery-xml-244_343_374-4132.html",
+      ),
+    ).toBeGreaterThanOrEqual(0.72);
+    expect(
+      scoreProductCandidate(
+        product,
+        "https://www.star-archerie.com/poignee-classique-atfx-wiawis-archery-xml-244_343_374-4132.html",
+        "Poignée classique ATF-X - Wiawis Archery",
+      ),
+    ).toBeGreaterThanOrEqual(0.72);
+  });
+
   it("extrait les URLs XML et les sitemaps déclarés", () => {
     expect(
       extractSitemapLocations(
