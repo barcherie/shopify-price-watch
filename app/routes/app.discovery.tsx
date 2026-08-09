@@ -12,6 +12,7 @@ import { authenticate } from "../shopify.server";
 import {
   cancelDiscoveryRun,
   createDiscoveryRunFromProducts,
+  deleteDiscoveryRun,
   DiscoveryAlreadyRunningError,
   processDiscoveryQueue,
   updateDiscoveryJobSearchQuery,
@@ -188,6 +189,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return {
         ok: true,
         message: "Annulation demandée. Les produits non traités sont annulés.",
+      };
+    }
+
+    if (intent === "delete") {
+      const runId = String(formData.get("runId") || "");
+      await deleteDiscoveryRun(runId);
+      return {
+        ok: true,
+        message: "Tâche supprimée.",
       };
     }
 
@@ -424,6 +434,19 @@ export default function DiscoveryPage() {
                           tone="critical"
                         >
                           Annuler
+                        </s-button>
+                      </Form>
+                    )}
+                    {run.status !== "RUNNING" && (
+                      <Form method="post">
+                        <input type="hidden" name="intent" value="delete" />
+                        <input type="hidden" name="runId" value={run.id} />
+                        <s-button
+                          type="submit"
+                          variant="tertiary"
+                          tone="critical"
+                        >
+                          Supprimer
                         </s-button>
                       </Form>
                     )}

@@ -295,6 +295,16 @@ export async function cancelDiscoveryRun(runId: string) {
   return refreshed;
 }
 
+export async function deleteDiscoveryRun(runId: string) {
+  const run = await prisma.discoveryRun.findUnique({ where: { id: runId } });
+  if (!run) throw new Error("Tâche introuvable.");
+  if (run.status === "RUNNING") {
+    throw new Error("Annulez d’abord la tâche en cours avant de la supprimer.");
+  }
+
+  await prisma.discoveryRun.delete({ where: { id: runId } });
+}
+
 export async function updateDiscoveryJobSearchQuery(input: {
   jobId: string;
   searchQuery?: string | null;
