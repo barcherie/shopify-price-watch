@@ -11,7 +11,6 @@ import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
 import {
   cancelDiscoveryRun,
-  createDiscoveryRun,
   createDiscoveryRunFromProducts,
   DiscoveryAlreadyRunningError,
   processDiscoveryQueue,
@@ -157,21 +156,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = String(formData.get("intent") || "");
 
   try {
-    if (intent === "create") {
-      const limit = Number(formData.get("limit") || 100);
-      const run = await createDiscoveryRun({
-        query: String(formData.get("query") || ""),
-        vendor: String(formData.get("vendor") || ""),
-        onlyMissing: formData.get("onlyMissing") === "on",
-        limit,
-      });
-      return {
-        ok: true,
-        runId: run.id,
-        message: `${run.totalProducts} produit(s) ajouté(s) à la file de recherche.`,
-      };
-    }
-
     if (intent === "createPrepared") {
       const vendor = String(formData.get("vendor") || "");
       const productIds = formData.getAll("productId").map(String);
@@ -238,11 +222,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 function dateTime(value: string | Date | null) {
   if (!value) return "—";
   return new Date(value).toLocaleString("fr-FR");
-}
-
-function percent(run: { totalProducts: number; processed: number }) {
-  if (!run.totalProducts) return 100;
-  return Math.round((run.processed / run.totalProducts) * 100);
 }
 
 export default function DiscoveryPage() {
@@ -404,115 +383,6 @@ export default function DiscoveryPage() {
         </s-stack>
       </s-section>
 
-      <s-section heading="Lancer un lot rapide">
-        <Form method="post">
-          <input type="hidden" name="intent" value="create" />
-          <s-stack gap="base">
-            <s-banner tone="info" heading="Tu peux quitter la page après le lancement">
-              La tâche est enregistrée en base. Le cron Coolify la fera avancer
-              par petits lots, et tu peux revenir plus tard pour contrôler les
-              correspondances proposées.
-            </s-banner>
-            <s-grid
-              gap="base"
-              gridTemplateColumns="@container (inline-size > 700px) repeat(3, 1fr), 1fr"
-            >
-              <s-text-field
-                label="Recherche produit"
-                name="query"
-                placeholder="Titre, marque ou SKU"
-              />
-              <s-select label="Marque" name="vendor">
-                <s-option value="">Toutes les marques</s-option>
-                {vendors.map((vendor) => (
-                  <s-option key={vendor} value={vendor}>
-                    {vendor}
-                  </s-option>
-                ))}
-              </s-select>
-              <s-number-field
-                label="Nombre maximum"
-                name="limit"
-                value="100"
-                min={1}
-                max={500}
-                required
-              />
-            </s-grid>
-            <s-switch
-              label="Chercher seulement les produits sans correspondance"
-              name="onlyMissing"
-              value="on"
-              defaultChecked
-            />
-            <s-stack direction="inline" justifyContent="end" gap="small-200">
-              <s-button type="submit" variant="primary" icon="search">
-                Créer la tâche
-              </s-button>
-            </s-stack>
-          </s-stack>
-        </Form>
-      </s-section>
-
-      {selectedRun && (
-        <s-section heading="Dernière tâche">
-          <s-stack gap="base">
-            <s-grid
-              gap="base"
-              gridTemplateColumns="@container (inline-size > 700px) repeat(5, 1fr), 1fr"
-            >
-              <Metric label="Avancement" value={`${percent(selectedRun)} %`} />
-              <Metric
-                label="Produits"
-                value={`${selectedRun.processed}/${selectedRun.totalProducts}`}
-              />
-              <Metric label="Trouvées" value={String(selectedRun.found)} />
-              <Metric
-                label="Déjà présentes"
-                value={String(selectedRun.alreadyExists)}
-              />
-              <Metric label="Erreurs" value={String(selectedRun.errors)} />
-            </s-grid>
-            <s-banner
-              tone={RUN_TONES[selectedRun.status]}
-              heading={RUN_LABELS[selectedRun.status]}
-            >
-              {selectedRun.message || "Aucun détail disponible."}
-            </s-banner>
-            {selectedRun.status === "RUNNING" && (
-              <s-banner tone="info" heading="Suivi en direct activé">
-                Cette page se met à jour automatiquement toutes les 5 secondes
-                pendant que le cron traite la file.
-              </s-banner>
-            )}
-            <s-stack direction="inline" justifyContent="space-between">
-              <s-text color="subdued">
-                Lancée le {dateTime(selectedRun.startedAt)}
-                {" · "}
-                Dernière mise à jour {dateTime(selectedRun.updatedAt)}
-              </s-text>
-              <Form method="post">
-                <s-stack direction="inline" gap="small-200">
-                  <input type="hidden" name="intent" value="process" />
-                  <s-button type="submit" variant="secondary" icon="refresh">
-                    Traiter maintenant
-                  </s-button>
-                </s-stack>
-              </Form>
-              {selectedRun.status === "RUNNING" && (
-                <Form method="post">
-                  <input type="hidden" name="intent" value="cancel" />
-                  <input type="hidden" name="runId" value={selectedRun.id} />
-                  <s-button type="submit" variant="tertiary" tone="critical">
-                    Annuler la tâche
-                  </s-button>
-                </Form>
-              )}
-            </s-stack>
-          </s-stack>
-        </s-section>
-      )}
-
       <s-section heading="Historique" padding="none">
         <s-table>
           <s-table-header-row>
@@ -650,16 +520,5 @@ export default function DiscoveryPage() {
         </s-section>
       )}
     </s-page>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <s-box border="base" borderRadius="base" padding="base">
-      <s-stack gap="small-200">
-        <s-text color="subdued">{label}</s-text>
-        <s-text type="strong">{value}</s-text>
-      </s-stack>
-    </s-box>
   );
 }
