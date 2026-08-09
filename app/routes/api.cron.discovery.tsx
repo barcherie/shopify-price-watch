@@ -30,10 +30,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return Response.json({ ok: true, ...result });
   } catch (error) {
     if (error instanceof DiscoveryAlreadyRunningError) {
-      return Response.json(
-        { ok: false, error: "A discovery run is already processing" },
-        { status: 409 },
-      );
+      return Response.json({
+        ok: true,
+        skipped: true,
+        reason: "ALREADY_RUNNING",
+      });
     }
     throw error;
   }

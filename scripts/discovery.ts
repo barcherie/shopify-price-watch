@@ -15,8 +15,7 @@ async function main() {
     );
   } catch (error) {
     if (error instanceof DiscoveryAlreadyRunningError) {
-      console.error("A discovery queue run is already active.");
-      process.exitCode = 3;
+      console.log("Discovery queue: already active, skipped this passage.");
       return;
     }
     throw error;
