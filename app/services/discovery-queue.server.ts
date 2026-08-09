@@ -151,6 +151,9 @@ async function refreshRun(runId: string) {
   const pending = jobs
     .filter((job) => job.status === "PENDING" || job.status === "RUNNING")
     .reduce((sum, job) => sum + job._count._all, 0);
+  const cancelled = jobs
+    .filter((job) => job.status === "CANCELLED")
+    .reduce((sum, job) => sum + job._count._all, 0);
   const processed = totalProducts - pending;
   const found = jobs.reduce((sum, job) => sum + (job._sum.found || 0), 0);
   const notFound = jobs.reduce((sum, job) => sum + (job._sum.notFound || 0), 0);
@@ -163,7 +166,13 @@ async function refreshRun(runId: string) {
     (job) => job.status === "FAILED" || job.status === "PARTIAL",
   );
   const status =
-    pending > 0 ? "RUNNING" : hasFailures ? "PARTIAL" : ("SUCCESS" as const);
+    pending > 0
+      ? "RUNNING"
+      : cancelled === totalProducts
+        ? "CANCELLED"
+        : hasFailures || cancelled > 0
+          ? "PARTIAL"
+          : ("SUCCESS" as const);
   return prisma.discoveryRun.update({
     where: { id: runId },
     data: {
@@ -177,9 +186,66 @@ async function refreshRun(runId: string) {
       message:
         pending > 0
           ? `${processed}/${totalProducts} produit(s) traités.`
-          : `Terminé : ${found} trouvée(s), ${notFound} sans résultat, ${alreadyExists} déjà renseignée(s), ${errors} erreur(s).`,
+          : cancelled > 0
+            ? `Tâche annulée : ${processed}/${totalProducts} produit(s) clôturé(s), dont ${cancelled} annulé(s).`
+            : `Terminé : ${found} trouvée(s), ${notFound} sans résultat, ${alreadyExists} déjà renseignée(s), ${errors} erreur(s).`,
       finishedAt: pending > 0 ? null : new Date(),
     },
+  });
+}
+
+export async function cancelDiscoveryRun(runId: string) {
+  const run = await prisma.discoveryRun.findUnique({ where: { id: runId } });
+  if (!run) throw new Error("Tâche introuvable.");
+  if (run.status !== "RUNNING") {
+    return prisma.discoveryRun.update({
+      where: { id: runId },
+      data: { message: "Cette tâche est déjà terminée." },
+    });
+  }
+
+  const cancelled = await prisma.discoveryJob.updateMany({
+    where: { runId, status: "PENDING" },
+    data: {
+      status: "CANCELLED",
+      message: "Produit annulé avant traitement.",
+      finishedAt: new Date(),
+    },
+  });
+  const refreshed = await refreshRun(runId);
+  if (refreshed.status === "RUNNING" && cancelled.count > 0) {
+    return prisma.discoveryRun.update({
+      where: { id: runId },
+      data: {
+        message:
+          "Annulation demandée. Le produit déjà en cours se termine, puis la tâche s’arrêtera.",
+      },
+    });
+  }
+  return refreshed;
+}
+
+export async function updateDiscoveryJobSearchQuery(input: {
+  jobId: string;
+  searchQuery?: string | null;
+}) {
+  const job = await prisma.discoveryJob.findUnique({
+    where: { id: input.jobId },
+    include: { run: true },
+  });
+  if (!job) throw new Error("Produit de tâche introuvable.");
+  if (job.status !== "PENDING") {
+    throw new Error(
+      "La requête peut être modifiée seulement avant le traitement du produit.",
+    );
+  }
+  if (job.run.status !== "RUNNING") {
+    throw new Error("Cette tâche n’est plus en cours.");
+  }
+
+  return prisma.discoveryJob.update({
+    where: { id: input.jobId },
+    data: { searchQuery: input.searchQuery?.trim() || null },
   });
 }
 

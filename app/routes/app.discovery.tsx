@@ -10,9 +10,11 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
 import {
+  cancelDiscoveryRun,
   createDiscoveryRun,
   DiscoveryAlreadyRunningError,
   processDiscoveryQueue,
+  updateDiscoveryJobSearchQuery,
 } from "../services/discovery-queue.server";
 
 const RUN_LABELS = {
@@ -20,6 +22,7 @@ const RUN_LABELS = {
   SUCCESS: "Succès",
   PARTIAL: "Partiel",
   FAILED: "Échec",
+  CANCELLED: "Annulée",
 } as const;
 
 const RUN_TONES = {
@@ -27,6 +30,7 @@ const RUN_TONES = {
   SUCCESS: "success",
   PARTIAL: "warning",
   FAILED: "critical",
+  CANCELLED: "info",
 } as const;
 
 const JOB_LABELS = {
@@ -35,6 +39,7 @@ const JOB_LABELS = {
   SUCCESS: "Succès",
   PARTIAL: "Partiel",
   FAILED: "Échec",
+  CANCELLED: "Annulé",
 } as const;
 
 const JOB_TONES = {
@@ -43,6 +48,7 @@ const JOB_TONES = {
   SUCCESS: "success",
   PARTIAL: "warning",
   FAILED: "critical",
+  CANCELLED: "neutral",
 } as const;
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -123,6 +129,25 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return {
         ok: true,
         message: `${result.processed} produit(s) traité(s).`,
+      };
+    }
+
+    if (intent === "cancel") {
+      const runId = String(formData.get("runId") || "");
+      await cancelDiscoveryRun(runId);
+      return {
+        ok: true,
+        message: "Annulation demandée. Les produits non traités sont annulés.",
+      };
+    }
+
+    if (intent === "updateJobQuery") {
+      const jobId = String(formData.get("jobId") || "");
+      const searchQuery = String(formData.get("searchQuery") || "");
+      await updateDiscoveryJobSearchQuery({ jobId, searchQuery });
+      return {
+        ok: true,
+        message: "Requête de recherche enregistrée.",
       };
     }
 
@@ -266,11 +291,22 @@ export default function DiscoveryPage() {
                 Dernière mise à jour {dateTime(selectedRun.updatedAt)}
               </s-text>
               <Form method="post">
-                <input type="hidden" name="intent" value="process" />
-                <s-button type="submit" variant="secondary" icon="refresh">
-                  Traiter maintenant
-                </s-button>
+                <s-stack direction="inline" gap="small-200">
+                  <input type="hidden" name="intent" value="process" />
+                  <s-button type="submit" variant="secondary" icon="refresh">
+                    Traiter maintenant
+                  </s-button>
+                </s-stack>
               </Form>
+              {selectedRun.status === "RUNNING" && (
+                <Form method="post">
+                  <input type="hidden" name="intent" value="cancel" />
+                  <input type="hidden" name="runId" value={selectedRun.id} />
+                  <s-button type="submit" variant="tertiary" tone="critical">
+                    Annuler la tâche
+                  </s-button>
+                </Form>
+              )}
             </s-stack>
           </s-stack>
         </s-section>
@@ -330,6 +366,7 @@ export default function DiscoveryPage() {
             <s-table-header-row>
               <s-table-header listSlot="primary">Produit</s-table-header>
               <s-table-header>État</s-table-header>
+              <s-table-header>Requête</s-table-header>
               <s-table-header>Trouvées</s-table-header>
               <s-table-header>Sans résultat</s-table-header>
               <s-table-header>Erreurs</s-table-header>
@@ -357,6 +394,34 @@ export default function DiscoveryPage() {
                     <s-badge tone={JOB_TONES[job.status]}>
                       {JOB_LABELS[job.status]}
                     </s-badge>
+                  </s-table-cell>
+                  <s-table-cell>
+                    {job.status === "PENDING" && selectedRun.status === "RUNNING" ? (
+                      <Form method="post">
+                        <input
+                          type="hidden"
+                          name="intent"
+                          value="updateJobQuery"
+                        />
+                        <input type="hidden" name="jobId" value={job.id} />
+                        <s-stack gap="small-200">
+                          <s-text-field
+                            label="Requête"
+                            labelAccessibilityVisibility="exclusive"
+                            name="searchQuery"
+                            value={job.searchQuery || ""}
+                            placeholder={selectedRun.query || job.product.title}
+                          />
+                          <s-button type="submit" variant="secondary">
+                            Enregistrer
+                          </s-button>
+                        </s-stack>
+                      </Form>
+                    ) : (
+                      <s-text color={job.searchQuery ? "base" : "subdued"}>
+                        {job.searchQuery || selectedRun.query || "—"}
+                      </s-text>
+                    )}
                   </s-table-cell>
                   <s-table-cell>{job.found}</s-table-cell>
                   <s-table-cell>{job.notFound}</s-table-cell>

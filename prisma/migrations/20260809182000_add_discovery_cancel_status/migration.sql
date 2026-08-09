@@ -1,0 +1,2 @@
+ALTER TYPE "DiscoveryRunStatus" ADD VALUE 'CANCELLED';
+ALTER TYPE "DiscoveryJobStatus" ADD VALUE 'CANCELLED';

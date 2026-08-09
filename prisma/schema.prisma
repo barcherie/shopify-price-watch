@@ -77,6 +77,7 @@ enum DiscoveryRunStatus {
   SUCCESS
   PARTIAL
   FAILED
+  CANCELLED
 }
 
 enum DiscoveryJobStatus {
@@ -85,6 +86,7 @@ enum DiscoveryJobStatus {
   SUCCESS
   PARTIAL
   FAILED
+  CANCELLED
 }
 
 model ShopifyProduct {
