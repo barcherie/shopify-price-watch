@@ -21,6 +21,7 @@ export default function App() {
       <s-app-nav>
         <s-link href="/app">Tableau de bord</s-link>
         <s-link href="/app/matches">Correspondances</s-link>
+        <s-link href="/app/discovery">Recherche auto</s-link>
         <s-link href="/app/competitors">Concurrents</s-link>
         <s-link href="/app/automation">Automatisation</s-link>
         <s-link href="/app/logs">Journal</s-link>

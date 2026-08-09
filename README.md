@@ -266,6 +266,40 @@ le même secret que le cron de relevé.
 npm run scrape
 ```
 
+## Recherche automatique de correspondances
+
+La page **Recherche auto** permet de créer une tâche de recherche sur plusieurs
+produits à la fois. La page peut ensuite être fermée : la tâche reste en base
+et le serveur la traite par petits lots.
+
+Configurer dans Coolify une tâche planifiée, par exemple toutes les 5 minutes :
+
+```cron
+*/5 * * * *
+```
+
+avec la commande :
+
+```bash
+npm run discovery
+```
+
+ou effectuer un `POST` vers :
+
+```text
+https://zixsw7530bseuso30tid1xpp.217.160.121.83.sslip.io/api/cron/discovery
+```
+
+avec l’en-tête :
+
+```text
+Authorization: Bearer <CRON_SECRET>
+```
+
+Chaque passage traite quelques produits, cherche chez les concurrents actifs et
+autorisés, puis ajoute les URLs trouvées en correspondance **à vérifier**. Les
+correspondances existantes ne sont pas recréées.
+
 ## Déploiement Coolify
 
 1. Créer une base PostgreSQL dans Coolify.

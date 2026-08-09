@@ -72,6 +72,21 @@ enum RobotsAccessStatus {
   DISALLOWED
 }
 
+enum DiscoveryRunStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+enum DiscoveryJobStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
 model ShopifyProduct {
   id                    String    @id @default(cuid())
   shopifyId             String    @unique
@@ -95,7 +110,8 @@ model ShopifyProduct {
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
-  matches ProductMatch[]
+  matches       ProductMatch[]
+  discoveryJobs DiscoveryJob[]
 
   @@index([vendor])
   @@index([status])
@@ -212,4 +228,52 @@ model JobLock {
   token       String?
   lockedUntil DateTime @default(dbgenerated("'1970-01-01 00:00:00'::timestamp"))
   updatedAt   DateTime @updatedAt
+}
+
+model DiscoveryRun {
+  id            String             @id @default(cuid())
+  status        DiscoveryRunStatus @default(RUNNING)
+  totalProducts Int                @default(0)
+  processed     Int                @default(0)
+  found         Int                @default(0)
+  notFound      Int                @default(0)
+  alreadyExists Int                @default(0)
+  errors        Int                @default(0)
+  query         String?
+  vendor        String?
+  onlyMissing   Boolean            @default(true)
+  message       String?
+  startedAt     DateTime           @default(now())
+  finishedAt    DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  jobs DiscoveryJob[]
+
+  @@index([createdAt(sort: Desc)])
+  @@index([status, createdAt])
+}
+
+model DiscoveryJob {
+  id            String             @id @default(cuid())
+  runId         String
+  productId     String
+  status        DiscoveryJobStatus @default(PENDING)
+  searchQuery   String?
+  found         Int                @default(0)
+  notFound      Int                @default(0)
+  alreadyExists Int                @default(0)
+  errors        Int                @default(0)
+  message       String?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  run     DiscoveryRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  product ShopifyProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, productId])
+  @@index([status, createdAt])
+  @@index([productId])
 }

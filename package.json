@@ -17,6 +17,7 @@
     "test:watch": "vitest",
     "seed": "prisma db seed",
     "scrape": "tsx scripts/scrape.ts",
+    "discovery": "tsx scripts/discovery.ts",
     "shopify": "shopify",
     "prisma": "prisma",
     "graphql-codegen": "graphql-codegen",
