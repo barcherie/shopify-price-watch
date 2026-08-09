@@ -9,6 +9,7 @@ const MAX_SITEMAP_REQUESTS = 12;
 const MAX_CANDIDATE_URLS = 50_000;
 const MINIMUM_SCORE = 0.72;
 const MAX_CANDIDATES_TO_VERIFY = 3;
+const DISCOVERY_CONCURRENCY = 4;
 const STOP_WORDS = new Set([
   "archery",
   "avec",
@@ -616,9 +617,14 @@ export async function discoverProductMatches(
     orderBy: { name: "asc" },
   });
   const results: DiscoveryResult[] = [];
-  for (const competitor of competitors) {
+  for (let index = 0; index < competitors.length; index += DISCOVERY_CONCURRENCY) {
+    const chunk = competitors.slice(index, index + DISCOVERY_CONCURRENCY);
     results.push(
-      await discoverProductMatch(productId, competitor.id, searchQuery),
+      ...(await Promise.all(
+        chunk.map((competitor) =>
+          discoverProductMatch(productId, competitor.id, searchQuery),
+        ),
+      )),
     );
   }
   return results;

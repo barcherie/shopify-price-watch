@@ -199,6 +199,32 @@
   white-space: nowrap;
 }
 
+.pw-product-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.pw-product-toggle__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: #f1f1f1;
+  color: #303030;
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+
 .pw-action-button {
   min-height: 32px;
   border: 0;

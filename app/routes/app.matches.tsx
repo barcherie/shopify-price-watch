@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
   Form,
@@ -426,24 +426,18 @@ export default function MatchesPage() {
     initialProduct,
   );
   const [searchQuery, setSearchQuery] = useState("");
-  const discoveryQueue = useRef<typeof competitors>([]);
-  const discoveryIndex = useRef(0);
-  const discoveryProductId = useRef("");
-  const discoveryResults = useRef<DiscoveryResult[]>([]);
-  const lastDiscoveryResponse = useRef<unknown>(null);
   const [discoveryState, setDiscoveryState] = useState<{
     running: boolean;
-    current: number;
     total: number;
-    currentName: string;
     results: DiscoveryResult[];
   }>({
     running: false,
-    current: 0,
     total: 0,
-    currentName: "",
     results: [],
   });
+  const [expandedProductIds, setExpandedProductIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const busy = navigation.state !== "idle" || discoveryState.running;
 
   function goToPage(page: number) {
@@ -464,57 +458,22 @@ export default function MatchesPage() {
       !discoveryState.running ||
       discoveryFetcher.state !== "idle" ||
       !data ||
-      data === lastDiscoveryResponse.current
+      !("discoveryResults" in data)
     ) {
       return;
     }
-    lastDiscoveryResponse.current = data;
-    const competitor = discoveryQueue.current[discoveryIndex.current];
-    const result =
-      "discoveryResult" in data && data.discoveryResult
-        ? data.discoveryResult
-        : {
-            competitorId: competitor.id,
-            competitorName: competitor.name,
-            status: "ERROR" as const,
-            message: data.message || "Erreur inconnue.",
-          };
-    discoveryResults.current = [...discoveryResults.current, result];
-    const nextIndex = discoveryIndex.current + 1;
-
-    if (nextIndex < discoveryQueue.current.length) {
-      discoveryIndex.current = nextIndex;
-      const nextCompetitor = discoveryQueue.current[nextIndex];
-      setDiscoveryState((state) => ({
-        ...state,
-        current: nextIndex + 1,
-        currentName: nextCompetitor.name,
-        results: discoveryResults.current,
-      }));
-      discoveryFetcher.submit(
-        {
-          intent: "discoverOne",
-          productShopifyId: discoveryProductId.current,
-          competitorId: nextCompetitor.id,
-          searchQuery,
-        },
-        { method: "POST" },
-      );
-      return;
-    }
-
-    const found = discoveryResults.current.filter(
+    const results = data.discoveryResults || [];
+    const found = results.filter(
       (item) => item.status === "FOUND",
     ).length;
     setDiscoveryState((state) => ({
       ...state,
       running: false,
-      results: discoveryResults.current,
+      results,
     }));
     shopify.toast.show(
-      `Recherche terminée : ${found}/${discoveryQueue.current.length} concurrent(s) trouvé(s).`,
+      `Recherche terminée : ${found}/${results.length} concurrent(s) trouvé(s).`,
     );
-    // The fetcher and queue are intentionally coordinated as a sequential job.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [discoveryFetcher.data, discoveryFetcher.state]);
 
@@ -581,9 +540,7 @@ export default function MatchesPage() {
     });
     setDiscoveryState({
       running: false,
-      current: 0,
       total: 0,
-      currentName: "",
       results: [],
     });
   }
@@ -600,27 +557,31 @@ export default function MatchesPage() {
       });
       return;
     }
-    discoveryQueue.current = queue;
-    discoveryIndex.current = 0;
-    discoveryProductId.current = pickedProduct.shopifyId;
-    discoveryResults.current = [];
-    lastDiscoveryResponse.current = discoveryFetcher.data;
     setDiscoveryState({
       running: true,
-      current: 1,
       total: queue.length,
-      currentName: queue[0].name,
       results: [],
     });
     discoveryFetcher.submit(
       {
-        intent: "discoverOne",
+        intent: "discover",
         productShopifyId: pickedProduct.shopifyId,
-        competitorId: queue[0].id,
         searchQuery,
       },
       { method: "POST" },
     );
+  }
+
+  function toggleProduct(productId: string) {
+    setExpandedProductIds((current) => {
+      const next = new Set(current);
+      if (next.has(productId)) {
+        next.delete(productId);
+      } else {
+        next.add(productId);
+      }
+      return next;
+    });
   }
 
   return (
@@ -706,17 +667,13 @@ export default function MatchesPage() {
           {discoveryState.running && (
             <s-banner
               tone="info"
-              heading={`Recherche ${discoveryState.current}/${discoveryState.total} · ${
-                discoveryState.results.filter(
-                  (result) => result.status === "FOUND",
-                ).length
-              } trouvé(s)`}
+              heading={`Recherche en parallèle chez ${discoveryState.total} concurrent(s)`}
             >
               <s-stack direction="inline" gap="small-200" alignItems="center">
                 <s-spinner accessibilityLabel="Recherche en cours" />
                 <s-text>
-                  Analyse de {discoveryState.currentName}. Les résultats déjà
-                  trouvés sont conservés au fur et à mesure.
+                  Price Watch lance plusieurs recherches en même temps, tout en
+                  gardant un délai poli par site concurrent.
                 </s-text>
               </s-stack>
             </s-banner>
@@ -878,33 +835,44 @@ export default function MatchesPage() {
 
       {productGroups.map((group) => {
         const addModalId = `add-competitor-${group.productId}`;
+        const isExpanded = expandedProductIds.has(group.productId);
         return (
           <s-section key={group.productId} padding="none">
-            <s-box padding="base">
+            <s-box padding="base" border="base" borderRadius="base">
               <s-stack
                 direction="inline"
                 gap="base"
                 alignItems="center"
                 justifyContent="space-between"
               >
-                <s-stack direction="inline" gap="base" alignItems="center">
-                  {group.imageUrl ? (
-                    <s-thumbnail
-                      src={group.imageUrl}
-                      alt={group.imageAlt || group.product}
-                      size="small"
-                    />
-                  ) : (
-                    <s-avatar initials={group.product.slice(0, 2)} />
-                  )}
-                  <s-stack gap="small-200">
-                    <s-text type="strong">{group.product}</s-text>
-                    <s-text color="subdued">
-                      {group.vendor || "Sans marque"} · {group.shopifyPrice}{" "}
-                      {group.currencyCode} · {group.matches.length} concurrent(s)
-                    </s-text>
+                <button
+                  type="button"
+                  className="pw-product-toggle"
+                  aria-expanded={isExpanded}
+                  onClick={() => toggleProduct(group.productId)}
+                >
+                  <span className="pw-product-toggle__icon">
+                    {isExpanded ? "▾" : "▸"}
+                  </span>
+                  <s-stack direction="inline" gap="base" alignItems="center">
+                    {group.imageUrl ? (
+                      <s-thumbnail
+                        src={group.imageUrl}
+                        alt={group.imageAlt || group.product}
+                        size="small"
+                      />
+                    ) : (
+                      <s-avatar initials={group.product.slice(0, 2)} />
+                    )}
+                    <s-stack gap="small-200">
+                      <s-text type="strong">{group.product}</s-text>
+                      <s-text color="subdued">
+                        {group.vendor || "Sans marque"} · {group.shopifyPrice}{" "}
+                        {group.currencyCode} · {group.matches.length} concurrent(s)
+                      </s-text>
+                    </s-stack>
                   </s-stack>
-                </s-stack>
+                </button>
                 <s-button
                   variant="primary"
                   icon="plus"
@@ -916,6 +884,7 @@ export default function MatchesPage() {
               </s-stack>
             </s-box>
 
+            {isExpanded && (
             <s-table>
               <s-table-header-row>
                 <s-table-header listSlot="primary">Concurrent</s-table-header>
@@ -1074,6 +1043,7 @@ export default function MatchesPage() {
                 })}
               </s-table-body>
             </s-table>
+            )}
             <AddCompetitorModal
               modalId={addModalId}
               productId={group.productId}
