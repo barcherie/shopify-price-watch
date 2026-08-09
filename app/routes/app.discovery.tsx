@@ -437,19 +437,17 @@ export default function DiscoveryPage() {
                         </s-button>
                       </Form>
                     )}
-                    {run.status !== "RUNNING" && (
-                      <Form method="post">
-                        <input type="hidden" name="intent" value="delete" />
-                        <input type="hidden" name="runId" value={run.id} />
-                        <s-button
-                          type="submit"
-                          variant="tertiary"
-                          tone="critical"
-                        >
-                          Supprimer
-                        </s-button>
-                      </Form>
-                    )}
+                    <Form method="post">
+                      <input type="hidden" name="intent" value="delete" />
+                      <input type="hidden" name="runId" value={run.id} />
+                      <s-button
+                        type="submit"
+                        variant="tertiary"
+                        tone="critical"
+                      >
+                        Supprimer
+                      </s-button>
+                    </Form>
                   </s-stack>
                 </s-table-cell>
               </s-table-row>

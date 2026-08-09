@@ -185,6 +185,12 @@ export async function createDiscoveryRunFromProducts(input: {
 }
 
 async function refreshRun(runId: string) {
+  const exists = await prisma.discoveryRun.findUnique({
+    where: { id: runId },
+    select: { id: true },
+  });
+  if (!exists) return null;
+
   const jobs = await prisma.discoveryJob.groupBy({
     by: ["status"],
     where: { runId },
@@ -275,32 +281,28 @@ export async function cancelDiscoveryRun(runId: string) {
   }
 
   const cancelled = await prisma.discoveryJob.updateMany({
-    where: { runId, status: "PENDING" },
+    where: { runId, status: { in: ["PENDING", "RUNNING"] } },
     data: {
       status: "CANCELLED",
-      message: "Produit annulé avant traitement.",
+      message: "Produit annulé.",
+      progressMessage: "Recherche annulée.",
       finishedAt: new Date(),
     },
   });
-  const refreshed = await refreshRun(runId);
-  if (refreshed.status === "RUNNING" && cancelled.count > 0) {
-    return prisma.discoveryRun.update({
-      where: { id: runId },
-      data: {
-        message:
-          "Annulation demandée. Le produit déjà en cours se termine, puis la tâche s’arrêtera.",
-      },
-    });
-  }
-  return refreshed;
+  await refreshRun(runId);
+  return prisma.discoveryRun.update({
+    where: { id: runId },
+    data: {
+      status: "CANCELLED",
+      message: `${cancelled.count} produit(s) annulé(s).`,
+      finishedAt: new Date(),
+    },
+  });
 }
 
 export async function deleteDiscoveryRun(runId: string) {
   const run = await prisma.discoveryRun.findUnique({ where: { id: runId } });
   if (!run) throw new Error("Tâche introuvable.");
-  if (run.status === "RUNNING") {
-    throw new Error("Annulez d’abord la tâche en cours avant de la supprimer.");
-  }
 
   await prisma.discoveryRun.delete({ where: { id: runId } });
 }
@@ -409,8 +411,8 @@ export async function processDiscoveryQueue(options?: {
               message: event.message,
             });
             logger?.(progressMessage);
-            await prisma.discoveryJob.update({
-              where: { id: job.id },
+            await prisma.discoveryJob.updateMany({
+              where: { id: job.id, status: "RUNNING" },
               data: { progressMessage },
             });
           },
@@ -419,8 +421,8 @@ export async function processDiscoveryQueue(options?: {
         logger?.(
           `Produit ${index + 1}/${jobs.length} : ${summary.found} trouvée(s), ${summary.notFound} sans résultat, ${summary.alreadyExists} déjà présente(s), ${summary.errors} erreur(s).`,
         );
-        await prisma.discoveryJob.update({
-          where: { id: job.id },
+        const updated = await prisma.discoveryJob.updateMany({
+          where: { id: job.id, status: "RUNNING" },
           data: {
             ...summary,
             status: jobStatus(summary),
@@ -429,12 +431,17 @@ export async function processDiscoveryQueue(options?: {
             finishedAt: new Date(),
           },
         });
+        if (updated.count === 0) {
+          logger?.(
+            `Produit ${index + 1}/${jobs.length} : mise à jour ignorée, tâche annulée ou supprimée.`,
+          );
+        }
       } catch (error) {
         logger?.(
           `Produit ${index + 1}/${jobs.length} : erreur pendant la recherche.`,
         );
-        await prisma.discoveryJob.update({
-          where: { id: job.id },
+        await prisma.discoveryJob.updateMany({
+          where: { id: job.id, status: "RUNNING" },
           data: {
             status: "FAILED",
             errors: 1,
