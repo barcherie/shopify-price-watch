@@ -243,6 +243,27 @@ async function refreshRun(runId: string) {
   });
 }
 
+function discoveryProgressMessage(input: {
+  productTitle: string;
+  competitorName: string;
+  current: number;
+  total: number;
+  status: string;
+  message?: string;
+}) {
+  if (input.status === "STARTED") {
+    return `${input.productTitle} : ${input.current}/${input.total} — recherche chez ${input.competitorName}…`;
+  }
+  const labels = {
+    FOUND: "trouvé",
+    NOT_FOUND: "non trouvé",
+    ERROR: "erreur",
+    ALREADY_EXISTS: "déjà renseigné",
+  } as const;
+  const label = labels[input.status as keyof typeof labels] || input.status;
+  return `${input.productTitle} : ${input.current}/${input.total} — ${input.competitorName} : ${label}${input.message ? ` (${input.message})` : ""}`;
+}
+
 export async function cancelDiscoveryRun(runId: string) {
   const run = await prisma.discoveryRun.findUnique({ where: { id: runId } });
   if (!run) throw new Error("Tâche introuvable.");
@@ -359,11 +380,31 @@ export async function processDiscoveryQueue(options?: {
       );
       await prisma.discoveryJob.update({
         where: { id: job.id },
-        data: { status: "RUNNING", startedAt: new Date() },
+        data: {
+          status: "RUNNING",
+          startedAt: new Date(),
+          progressMessage: `${job.product.title} : préparation de la recherche…`,
+        },
       });
 
       try {
-        const results = await discoverProductMatches(job.productId, searchQuery);
+        const results = await discoverProductMatches(job.productId, searchQuery, {
+          onProgress: async (event) => {
+            const progressMessage = discoveryProgressMessage({
+              productTitle: job.product.title,
+              competitorName: event.competitorName,
+              current: event.current,
+              total: event.total,
+              status: event.status,
+              message: event.message,
+            });
+            logger?.(progressMessage);
+            await prisma.discoveryJob.update({
+              where: { id: job.id },
+              data: { progressMessage },
+            });
+          },
+        });
         const summary = summarizeResults(results);
         logger?.(
           `Produit ${index + 1}/${jobs.length} : ${summary.found} trouvée(s), ${summary.notFound} sans résultat, ${summary.alreadyExists} déjà présente(s), ${summary.errors} erreur(s).`,
@@ -374,6 +415,7 @@ export async function processDiscoveryQueue(options?: {
             ...summary,
             status: jobStatus(summary),
             message: `${job.product.title} : ${summary.found} trouvée(s), ${summary.notFound} sans résultat, ${summary.alreadyExists} déjà renseignée(s), ${summary.errors} erreur(s).`,
+            progressMessage: "Recherche terminée.",
             finishedAt: new Date(),
           },
         });
@@ -390,6 +432,7 @@ export async function processDiscoveryQueue(options?: {
               error instanceof Error
                 ? error.message.slice(0, 500)
                 : "Erreur inconnue pendant la recherche.",
+            progressMessage: "Recherche arrêtée sur une erreur.",
             finishedAt: new Date(),
           },
         });

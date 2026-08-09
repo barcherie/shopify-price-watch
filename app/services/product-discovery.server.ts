@@ -81,6 +81,18 @@ export type DiscoveryResult = {
   message?: string;
 };
 
+export type DiscoveryProgressEvent = {
+  competitorName: string;
+  current: number;
+  total: number;
+  status: "STARTED" | DiscoveryResult["status"];
+  message?: string;
+};
+
+type DiscoverProductMatchesOptions = {
+  onProgress?: (event: DiscoveryProgressEvent) => Promise<void> | void;
+};
+
 function normalize(value: string) {
   return value
     .normalize("NFD")
@@ -786,19 +798,41 @@ export async function discoverProductMatch(
 export async function discoverProductMatches(
   productId: string,
   searchQuery?: string | null,
+  options?: DiscoverProductMatchesOptions,
 ) {
   const competitors = await prisma.competitor.findMany({
     where: { active: true, legalStatus: "APPROVED" },
     orderBy: { name: "asc" },
   });
   const results: DiscoveryResult[] = [];
+  let completed = 0;
   for (let index = 0; index < competitors.length; index += DISCOVERY_CONCURRENCY) {
     const chunk = competitors.slice(index, index + DISCOVERY_CONCURRENCY);
     results.push(
       ...(await Promise.all(
-        chunk.map((competitor) =>
-          discoverProductMatch(productId, competitor.id, searchQuery),
-        ),
+        chunk.map(async (competitor) => {
+          await options?.onProgress?.({
+            competitorName: competitor.name,
+            current: completed + 1,
+            total: competitors.length,
+            status: "STARTED",
+            message: `Recherche chez ${competitor.name}`,
+          });
+          const result = await discoverProductMatch(
+            productId,
+            competitor.id,
+            searchQuery,
+          );
+          completed += 1;
+          await options?.onProgress?.({
+            competitorName: competitor.name,
+            current: completed,
+            total: competitors.length,
+            status: result.status,
+            message: result.message,
+          });
+          return result;
+        }),
       )),
     );
   }

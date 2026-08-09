@@ -267,6 +267,7 @@ model DiscoveryJob {
   alreadyExists Int                @default(0)
   errors        Int                @default(0)
   message       String?
+  progressMessage String?
   startedAt     DateTime?
   finishedAt    DateTime?
   createdAt     DateTime           @default(now())

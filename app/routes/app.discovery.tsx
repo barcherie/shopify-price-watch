@@ -456,7 +456,7 @@ export default function DiscoveryPage() {
               <s-table-header>Trouvées</s-table-header>
               <s-table-header>Sans résultat</s-table-header>
               <s-table-header>Erreurs</s-table-header>
-              <s-table-header listSlot="secondary">Message</s-table-header>
+              <s-table-header listSlot="secondary">Activité</s-table-header>
             </s-table-header-row>
             <s-table-body>
               {selectedRun.jobs.map((job) => (
@@ -512,7 +512,16 @@ export default function DiscoveryPage() {
                   <s-table-cell>{job.found}</s-table-cell>
                   <s-table-cell>{job.notFound}</s-table-cell>
                   <s-table-cell>{job.errors}</s-table-cell>
-                  <s-table-cell>{job.message || "—"}</s-table-cell>
+                  <s-table-cell>
+                    <s-stack gap="none">
+                      <s-text>
+                        {job.progressMessage || job.message || "—"}
+                      </s-text>
+                      {job.message && job.progressMessage && (
+                        <s-text color="subdued">{job.message}</s-text>
+                      )}
+                    </s-stack>
+                  </s-table-cell>
                 </s-table-row>
               ))}
             </s-table-body>
