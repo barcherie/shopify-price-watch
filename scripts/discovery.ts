@@ -6,7 +6,9 @@ import {
 
 async function main() {
   try {
-    const result = await processDiscoveryQueue();
+    const result = await processDiscoveryQueue({
+      logger: (message) => console.log(`[discovery] ${message}`),
+    });
     console.log(
       `Discovery queue: ${result.processed} product(s) processed.`,
     );

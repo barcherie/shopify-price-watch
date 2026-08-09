@@ -13,6 +13,8 @@ const MAX_PRODUCTS_PER_RUN = 500;
 
 export class DiscoveryAlreadyRunningError extends Error {}
 
+type DiscoveryQueueLogger = (message: string) => void;
+
 async function acquireLock() {
   const token = randomUUID();
   const now = new Date();
@@ -181,9 +183,16 @@ async function refreshRun(runId: string) {
   });
 }
 
-export async function processDiscoveryQueue(options?: { batchSize?: number }) {
+export async function processDiscoveryQueue(options?: {
+  batchSize?: number;
+  logger?: DiscoveryQueueLogger;
+}) {
   const lockToken = await acquireLock();
-  const batchSize = Math.min(10, Math.max(1, options?.batchSize || DEFAULT_BATCH_SIZE));
+  const batchSize = Math.min(
+    10,
+    Math.max(1, options?.batchSize || DEFAULT_BATCH_SIZE),
+  );
+  const logger = options?.logger;
   const touchedRuns = new Set<string>();
   let processed = 0;
 
@@ -200,11 +209,19 @@ export async function processDiscoveryQueue(options?: { batchSize?: number }) {
       orderBy: { createdAt: "asc" },
       take: batchSize,
     });
+    logger?.(
+      jobs.length
+        ? `${jobs.length} produit(s) à traiter dans ce passage.`
+        : "Aucun produit en attente.",
+    );
 
-    for (const job of jobs) {
+    for (const [index, job] of jobs.entries()) {
       await renewLock(lockToken);
       touchedRuns.add(job.runId);
       const searchQuery = job.searchQuery || job.run.query || null;
+      logger?.(
+        `Produit ${index + 1}/${jobs.length} : ${job.product.title} — recherche lancée.`,
+      );
       await prisma.discoveryJob.update({
         where: { id: job.id },
         data: { status: "RUNNING", startedAt: new Date() },
@@ -213,6 +230,9 @@ export async function processDiscoveryQueue(options?: { batchSize?: number }) {
       try {
         const results = await discoverProductMatches(job.productId, searchQuery);
         const summary = summarizeResults(results);
+        logger?.(
+          `Produit ${index + 1}/${jobs.length} : ${summary.found} trouvée(s), ${summary.notFound} sans résultat, ${summary.alreadyExists} déjà présente(s), ${summary.errors} erreur(s).`,
+        );
         await prisma.discoveryJob.update({
           where: { id: job.id },
           data: {
@@ -223,6 +243,9 @@ export async function processDiscoveryQueue(options?: { batchSize?: number }) {
           },
         });
       } catch (error) {
+        logger?.(
+          `Produit ${index + 1}/${jobs.length} : erreur pendant la recherche.`,
+        );
         await prisma.discoveryJob.update({
           where: { id: job.id },
           data: {

@@ -1,6 +1,11 @@
 import { useEffect } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useLoaderData } from "react-router";
+import {
+  Form,
+  useActionData,
+  useLoaderData,
+  useRevalidator,
+} from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
@@ -152,6 +157,7 @@ function percent(run: { totalProducts: number; processed: number }) {
 export default function DiscoveryPage() {
   const { vendors, runs, selectedRun } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
+  const revalidator = useRevalidator();
   const shopify = useAppBridge();
 
   useEffect(() => {
@@ -159,6 +165,16 @@ export default function DiscoveryPage() {
       shopify.toast.show(actionData.message, { isError: !actionData.ok });
     }
   }, [actionData, shopify]);
+
+  useEffect(() => {
+    if (selectedRun?.status !== "RUNNING") return;
+    const interval = window.setInterval(() => {
+      if (revalidator.state === "idle") {
+        revalidator.revalidate();
+      }
+    }, 5_000);
+    return () => window.clearInterval(interval);
+  }, [revalidator, selectedRun?.status]);
 
   return (
     <s-page heading="Recherche automatique">
@@ -237,9 +253,17 @@ export default function DiscoveryPage() {
             >
               {selectedRun.message || "Aucun détail disponible."}
             </s-banner>
+            {selectedRun.status === "RUNNING" && (
+              <s-banner tone="info" heading="Suivi en direct activé">
+                Cette page se met à jour automatiquement toutes les 5 secondes
+                pendant que le cron traite la file.
+              </s-banner>
+            )}
             <s-stack direction="inline" justifyContent="space-between">
               <s-text color="subdued">
                 Lancée le {dateTime(selectedRun.startedAt)}
+                {" · "}
+                Dernière mise à jour {dateTime(selectedRun.updatedAt)}
               </s-text>
               <Form method="post">
                 <input type="hidden" name="intent" value="process" />
