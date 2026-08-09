@@ -8,7 +8,7 @@ import { validateTargetUrl } from "./url-safety.server";
 const MAX_SITEMAP_REQUESTS = 12;
 const MAX_CANDIDATE_URLS = 50_000;
 const MINIMUM_SCORE = 0.72;
-const MAX_CANDIDATES_TO_VERIFY = 3;
+const MAX_CANDIDATES_TO_VERIFY = 8;
 const DISCOVERY_CONCURRENCY = 4;
 const STOP_WORDS = new Set([
   "archery",
@@ -152,6 +152,10 @@ export function scoreProductCandidate(
   const pathname = decodeURIComponent(new URL(candidateUrl).pathname);
   const expected = normalize(`${product.vendor || ""} ${product.title}`);
   const candidate = normalize(`${candidateLabel} ${pathname}`);
+  const expectedKit = /\bkit\b/.test(expected);
+  const candidateKit = /\bkit\b/.test(candidate);
+  if (!expectedKit && candidateKit) return 0;
+
   const expectedYears: string[] =
     normalize(product.title).match(/\b20\d{2}\b/g) || [];
   const candidateYears: string[] = candidate.match(/\b20\d{2}\b/g) || [];
@@ -395,6 +399,23 @@ async function discoverOnCompetitor(
       const html = await politeFetch(searchUrl.toString(), competitor.domain);
       successfulSource = true;
       const $ = load(html);
+      const candidateLabel = (element: Parameters<typeof $>[0]) => {
+        const linkText = $(element).text();
+        const cardText = $(element)
+          .closest(
+            [
+              "article",
+              ".product-miniature",
+              ".product-card",
+              ".product-item",
+              ".product",
+              ".card",
+              "li",
+            ].join(","),
+          )
+          .text();
+        return `${linkText} ${cardText}`.slice(0, 2_000);
+      };
       const searchCandidates = $("a[href]")
         .map((_, element) => {
           const href = $(element).attr("href");
@@ -419,7 +440,7 @@ async function discoverOnCompetitor(
               score: scoreProductCandidate(
                 product,
                 url,
-                $(element).text(),
+                candidateLabel(element),
               ),
             };
           } catch {

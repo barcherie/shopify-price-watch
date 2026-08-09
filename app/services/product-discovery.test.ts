@@ -83,6 +83,35 @@ describe("product discovery", () => {
     ).toBeGreaterThanOrEqual(0.72);
   });
 
+  it("utilise le texte descriptif du bloc produit quand le lien est trop court", () => {
+    const product = {
+      title: "Branches Kinetic Astonix ILF Cross Carbon/Foam",
+      vendor: "Kinetic",
+      sku: null,
+    };
+    expect(
+      scoreProductCandidate(
+        product,
+        "https://dianearcherie.com/branches/2419-branches-kinetic-astonix.html",
+        "Branches KINETIC Astonix. Construites en carbone croisé (cross carbon) et noyau mousse (foam core), compatible ILF.",
+      ),
+    ).toBeGreaterThanOrEqual(0.72);
+  });
+
+  it("ne remonte pas un kit quand le produit attendu est une paire de branches", () => {
+    expect(
+      scoreProductCandidate(
+        {
+          title: "Branches Kinetic Astonix ILF Cross Carbon/Foam",
+          vendor: "Kinetic",
+          sku: null,
+        },
+        "https://dianearcherie.com/kits-arc-classique/2603-kit-kinetic-valenz-plus-astonix-carbone.html",
+        "Kit KINETIC Valenz Plus + Astonix carbone",
+      ),
+    ).toBe(0);
+  });
+
   it("rejette une année explicitement contradictoire", () => {
     const product = {
       title: "PSE Lazer X – 2026",
