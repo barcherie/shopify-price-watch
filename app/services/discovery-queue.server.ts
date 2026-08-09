@@ -9,6 +9,7 @@ import {
 const LOCK_ID = "price-watch-discovery";
 const LOCK_DURATION_MS = 30 * 60 * 1000;
 const DEFAULT_BATCH_SIZE = 3;
+const STALE_RUNNING_JOB_MS = 45 * 60 * 1000;
 const MAX_PRODUCTS_PER_RUN = 500;
 
 export class DiscoveryAlreadyRunningError extends Error {}
@@ -311,6 +312,26 @@ export async function processDiscoveryQueue(options?: {
   let processed = 0;
 
   try {
+    const staleThreshold = new Date(Date.now() - STALE_RUNNING_JOB_MS);
+    const recoveredJobs = await prisma.discoveryJob.updateMany({
+      where: {
+        status: "RUNNING",
+        startedAt: { lt: staleThreshold },
+        run: { status: "RUNNING" },
+      },
+      data: {
+        status: "PENDING",
+        message:
+          "Recherche précédente interrompue avant la fin. Nouveau passage prévu.",
+        startedAt: null,
+      },
+    });
+    if (recoveredJobs.count > 0) {
+      logger?.(
+        `${recoveredJobs.count} produit(s) interrompu(s) remis en attente.`,
+      );
+    }
+
     const jobs = await prisma.discoveryJob.findMany({
       where: {
         status: "PENDING",

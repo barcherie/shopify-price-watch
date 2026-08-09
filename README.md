@@ -284,6 +284,13 @@ avec la commande :
 npm run discovery
 ```
 
+Par défaut, cette commande traite **1 produit par passage** pour éviter les pics
+mémoire sur un petit VPS. La taille du lot peut être ajustée avec :
+
+```bash
+DISCOVERY_BATCH_SIZE=2 npm run discovery
+```
+
 ou effectuer un `POST` vers :
 
 ```text
@@ -296,8 +303,8 @@ avec l’en-tête :
 Authorization: Bearer <CRON_SECRET>
 ```
 
-Chaque passage traite quelques produits, cherche chez les concurrents actifs et
-autorisés, puis ajoute les URLs trouvées en correspondance **à vérifier**. Les
+Chaque passage traite un petit nombre de produits, cherche chez les concurrents
+actifs et autorisés, puis ajoute les URLs trouvées en correspondance **à vérifier**. Les
 correspondances existantes ne sont pas recréées.
 
 ## Déploiement Coolify

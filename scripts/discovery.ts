@@ -7,6 +7,7 @@ import {
 async function main() {
   try {
     const result = await processDiscoveryQueue({
+      batchSize: Number(process.env.DISCOVERY_BATCH_SIZE || 1),
       logger: (message) => console.log(`[discovery] ${message}`),
     });
     console.log(
