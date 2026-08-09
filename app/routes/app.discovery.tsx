@@ -192,14 +192,17 @@ export default function DiscoveryPage() {
   }, [actionData, shopify]);
 
   useEffect(() => {
-    if (selectedRun?.status !== "RUNNING") return;
+    const hasRunningRun =
+      selectedRun?.status === "RUNNING" ||
+      runs.some((run) => run.status === "RUNNING");
+    if (!hasRunningRun) return;
     const interval = window.setInterval(() => {
       if (revalidator.state === "idle") {
         revalidator.revalidate();
       }
     }, 5_000);
     return () => window.clearInterval(interval);
-  }, [revalidator, selectedRun?.status]);
+  }, [revalidator, runs, selectedRun?.status]);
 
   return (
     <s-page heading="Recherche automatique">
@@ -321,7 +324,7 @@ export default function DiscoveryPage() {
             <s-table-header>Trouvées</s-table-header>
             <s-table-header>Sans résultat</s-table-header>
             <s-table-header>Erreurs</s-table-header>
-            <s-table-header listSlot="secondary">Détail</s-table-header>
+            <s-table-header listSlot="secondary">Actions</s-table-header>
           </s-table-header-row>
           <s-table-body>
             {runs.map((run) => (
@@ -339,9 +342,24 @@ export default function DiscoveryPage() {
                 <s-table-cell>{run.notFound}</s-table-cell>
                 <s-table-cell>{run.errors}</s-table-cell>
                 <s-table-cell>
-                  <s-link href={`/app/discovery?run=${run.id}`}>
-                    Voir le détail
-                  </s-link>
+                  <s-stack direction="inline" gap="small-200">
+                    <s-link href={`/app/discovery?run=${run.id}`}>
+                      Voir le détail
+                    </s-link>
+                    {run.status === "RUNNING" && (
+                      <Form method="post">
+                        <input type="hidden" name="intent" value="cancel" />
+                        <input type="hidden" name="runId" value={run.id} />
+                        <s-button
+                          type="submit"
+                          variant="tertiary"
+                          tone="critical"
+                        >
+                          Annuler
+                        </s-button>
+                      </Form>
+                    )}
+                  </s-stack>
                 </s-table-cell>
               </s-table-row>
             ))}
