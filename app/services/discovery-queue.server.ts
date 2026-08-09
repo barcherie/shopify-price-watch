@@ -135,6 +135,54 @@ export async function createDiscoveryRun(input: {
   return run;
 }
 
+export async function createDiscoveryRunFromProducts(input: {
+  productQueries: Array<{ productId: string; searchQuery?: string | null }>;
+  vendor?: string | null;
+}) {
+  const productQueries = input.productQueries
+    .map((item) => ({
+      productId: item.productId.trim(),
+      searchQuery: item.searchQuery?.trim() || null,
+    }))
+    .filter((item) => item.productId);
+  if (!productQueries.length) {
+    throw new Error("Sélectionnez au moins un produit.");
+  }
+
+  const productIds = Array.from(
+    new Set(productQueries.map((item) => item.productId)),
+  ).slice(0, MAX_PRODUCTS_PER_RUN);
+  const queryByProductId = new Map(
+    productQueries.map((item) => [item.productId, item.searchQuery]),
+  );
+  const products = await prisma.shopifyProduct.findMany({
+    where: { id: { in: productIds }, status: { not: "DELETED" } },
+    select: { id: true },
+    orderBy: [{ vendor: "asc" }, { title: "asc" }],
+  });
+  if (!products.length) {
+    throw new Error("Aucun produit valide dans la sélection.");
+  }
+
+  return prisma.discoveryRun.create({
+    data: {
+      totalProducts: products.length,
+      vendor: input.vendor?.trim() || null,
+      onlyMissing: false,
+      message: "Recherche préparée avec des requêtes par produit.",
+      status: "RUNNING",
+      jobs: {
+        createMany: {
+          data: products.map((product) => ({
+            productId: product.id,
+            searchQuery: queryByProductId.get(product.id) || null,
+          })),
+        },
+      },
+    },
+  });
+}
+
 async function refreshRun(runId: string) {
   const jobs = await prisma.discoveryJob.groupBy({
     by: ["status"],

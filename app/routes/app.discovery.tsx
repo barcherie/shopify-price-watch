@@ -12,6 +12,7 @@ import { authenticate } from "../shopify.server";
 import {
   cancelDiscoveryRun,
   createDiscoveryRun,
+  createDiscoveryRunFromProducts,
   DiscoveryAlreadyRunningError,
   processDiscoveryQueue,
   updateDiscoveryJobSearchQuery,
@@ -55,14 +56,59 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
   const url = new URL(request.url);
   const selectedRunId = url.searchParams.get("run") || "";
+  const selectedVendor = url.searchParams.get("vendor") || "";
+  const productQuery = url.searchParams.get("productQuery")?.trim() || "";
 
-  const [vendors, runs] = await Promise.all([
+  const productWhere = {
+    status: { not: "DELETED" },
+    ...(selectedVendor ? { vendor: selectedVendor } : undefined),
+    ...(productQuery
+      ? {
+          OR: [
+            { title: { contains: productQuery, mode: "insensitive" as const } },
+            {
+              firstVariantSku: {
+                contains: productQuery,
+                mode: "insensitive" as const,
+              },
+            },
+          ],
+        }
+      : undefined),
+  };
+
+  const [vendors, preparedProducts, runs] = await Promise.all([
     prisma.shopifyProduct.findMany({
       where: { status: { not: "DELETED" }, vendor: { not: null } },
       select: { vendor: true },
       distinct: ["vendor"],
       orderBy: { vendor: "asc" },
     }),
+    selectedVendor
+      ? prisma.shopifyProduct.findMany({
+          where: productWhere,
+          select: {
+            id: true,
+            title: true,
+            vendor: true,
+            firstVariantSku: true,
+            featuredImageUrl: true,
+            featuredImageAlt: true,
+            _count: {
+              select: {
+                matches: {
+                  where: {
+                    status: { in: ["PENDING", "VALIDATED"] },
+                    competitor: { active: true, legalStatus: "APPROVED" },
+                  },
+                },
+              },
+            },
+          },
+          orderBy: [{ title: "asc" }],
+          take: 200,
+        })
+      : [],
     prisma.discoveryRun.findMany({
       orderBy: { createdAt: "desc" },
       take: 10,
@@ -98,6 +144,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     vendors: vendors
       .map((item) => item.vendor)
       .filter((vendor): vendor is string => Boolean(vendor)),
+    preparedProducts,
+    preparation: { selectedVendor, productQuery },
     runs,
     selectedRun,
   };
@@ -121,6 +169,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         ok: true,
         runId: run.id,
         message: `${run.totalProducts} produit(s) ajouté(s) à la file de recherche.`,
+      };
+    }
+
+    if (intent === "createPrepared") {
+      const vendor = String(formData.get("vendor") || "");
+      const productIds = formData.getAll("productId").map(String);
+      const productQueries = productIds.map((productId) => ({
+        productId,
+        searchQuery: String(formData.get(`searchQuery:${productId}`) || ""),
+      }));
+      const run = await createDiscoveryRunFromProducts({
+        vendor,
+        productQueries,
+      });
+      return {
+        ok: true,
+        runId: run.id,
+        message: `${run.totalProducts} produit(s) ajoutés à la tâche préparée.`,
       };
     }
 
@@ -180,7 +246,8 @@ function percent(run: { totalProducts: number; processed: number }) {
 }
 
 export default function DiscoveryPage() {
-  const { vendors, runs, selectedRun } = useLoaderData<typeof loader>();
+  const { vendors, preparedProducts, preparation, runs, selectedRun } =
+    useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const revalidator = useRevalidator();
   const shopify = useAppBridge();
@@ -207,6 +274,137 @@ export default function DiscoveryPage() {
   return (
     <s-page heading="Recherche automatique">
       <s-section heading="Lancer un lot">
+        <s-stack gap="base">
+          <Form method="get">
+            <s-stack gap="base">
+              <s-banner
+                tone="info"
+                heading="Prépare la recherche avant de lancer"
+              >
+                Choisis une marque, ajuste la requête de recherche sur chaque
+                produit, puis crée la tâche. Les URLs trouvées resteront à
+                vérifier avant validation.
+              </s-banner>
+              <s-grid
+                gap="base"
+                gridTemplateColumns="@container (inline-size > 700px) 1fr 1fr auto, 1fr"
+              >
+                <s-select
+                  label="Marque à préparer"
+                  name="vendor"
+                  value={preparation.selectedVendor}
+                >
+                  <s-option value="">Choisir une marque</s-option>
+                  {vendors.map((vendor) => (
+                    <s-option key={vendor} value={vendor}>
+                      {vendor}
+                    </s-option>
+                  ))}
+                </s-select>
+                <s-text-field
+                  label="Filtrer les produits"
+                  name="productQuery"
+                  value={preparation.productQuery}
+                  placeholder="Optionnel : modèle ou SKU"
+                />
+                <s-button type="submit" variant="secondary">
+                  Afficher les produits
+                </s-button>
+              </s-grid>
+            </s-stack>
+          </Form>
+
+          {preparation.selectedVendor && (
+            <Form method="post">
+              <input type="hidden" name="intent" value="createPrepared" />
+              <input type="hidden" name="vendor" value={preparation.selectedVendor} />
+              <s-stack gap="base">
+                <s-table>
+                  <s-table-header-row>
+                    <s-table-header listSlot="primary">Produit</s-table-header>
+                    <s-table-header>Inclure</s-table-header>
+                    <s-table-header>Requête de recherche</s-table-header>
+                    <s-table-header listSlot="secondary">
+                      Correspondances
+                    </s-table-header>
+                  </s-table-header-row>
+                  <s-table-body>
+                    {preparedProducts.map((product) => (
+                      <s-table-row key={product.id}>
+                        <s-table-cell>
+                          <s-stack
+                            direction="inline"
+                            gap="small-200"
+                            alignItems="center"
+                          >
+                            {product.featuredImageUrl && (
+                              <s-thumbnail
+                                src={product.featuredImageUrl}
+                                alt={
+                                  product.featuredImageAlt || product.title
+                                }
+                                size="small"
+                              />
+                            )}
+                            <s-stack gap="none">
+                              <s-text type="strong">{product.title}</s-text>
+                              <s-text color="subdued">
+                                {product.firstVariantSku || "SKU absent"}
+                              </s-text>
+                            </s-stack>
+                          </s-stack>
+                        </s-table-cell>
+                        <s-table-cell>
+                          <s-checkbox
+                            label="Inclure"
+                            name="productId"
+                            value={product.id}
+                            defaultChecked
+                          />
+                        </s-table-cell>
+                        <s-table-cell>
+                          <s-text-field
+                            label="Requête"
+                            labelAccessibilityVisibility="exclusive"
+                            name={`searchQuery:${product.id}`}
+                            value={product.title}
+                            placeholder={product.title}
+                          />
+                        </s-table-cell>
+                        <s-table-cell>
+                          <s-text color="subdued">
+                            {product._count.matches} existante(s)
+                          </s-text>
+                        </s-table-cell>
+                      </s-table-row>
+                    ))}
+                    {!preparedProducts.length && (
+                      <s-table-row>
+                        <s-table-cell>Aucun produit pour cette marque</s-table-cell>
+                        <s-table-cell>—</s-table-cell>
+                        <s-table-cell>—</s-table-cell>
+                        <s-table-cell>—</s-table-cell>
+                      </s-table-row>
+                    )}
+                  </s-table-body>
+                </s-table>
+                <s-stack direction="inline" justifyContent="end" gap="small-200">
+                  <s-button
+                    type="submit"
+                    variant="primary"
+                    icon="search"
+                    disabled={!preparedProducts.length}
+                  >
+                    Créer la tâche avec les produits cochés
+                  </s-button>
+                </s-stack>
+              </s-stack>
+            </Form>
+          )}
+        </s-stack>
+      </s-section>
+
+      <s-section heading="Lancer un lot rapide">
         <Form method="post">
           <input type="hidden" name="intent" value="create" />
           <s-stack gap="base">
