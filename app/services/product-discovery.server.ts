@@ -30,6 +30,41 @@ const STOP_WORDS = new Set([
   "version",
   "xml",
 ]);
+const PRODUCT_TYPE_TOKENS = new Set([
+  "arc",
+  "arcs",
+  "branch",
+  "branches",
+  "central",
+  "compound",
+  "grip",
+  "limb",
+  "limbs",
+  "poignee",
+  "poignees",
+  "recurve",
+  "stabilisateur",
+  "stabilisation",
+  "viseur",
+]);
+const MATERIAL_OR_VARIANT_TOKENS = new Set([
+  "aluminium",
+  "bois",
+  "carbon",
+  "carbone",
+  "core",
+  "cross",
+  "foam",
+  "formula",
+  "grand",
+  "ilf",
+  "laminate",
+  "mousse",
+  "prix",
+  "syntactic",
+  "syntatic",
+  "wood",
+]);
 
 type ProductIdentity = {
   title: string;
@@ -99,6 +134,37 @@ function semanticTokens(value: string) {
   return mapped;
 }
 
+function compactModelAliases(tokens: string[]) {
+  const aliases: string[] = [];
+  for (let index = 0; index < tokens.length - 1; index += 1) {
+    if (/^[a-z]{2,4}$/.test(tokens[index]) && tokens[index + 1] === "x") {
+      aliases.push(`${tokens[index]}x`);
+    }
+  }
+  return aliases;
+}
+
+function modelTokens(product: ProductIdentity) {
+  const normalizedVendor = normalize(product.vendor || "");
+  const semanticTitleTokens = semanticTokens(product.title);
+  return Array.from(
+    new Set(
+      [...semanticTitleTokens, ...compactModelAliases(semanticTitleTokens)].filter(
+        (token) => {
+          if (!isSignificantToken(token) || isIgnoredDiscoveryToken(token)) {
+            return false;
+          }
+          if (normalizedVendor && token === normalizedVendor) return false;
+          return (
+            !PRODUCT_TYPE_TOKENS.has(token) &&
+            !MATERIAL_OR_VARIANT_TOKENS.has(token)
+          );
+        },
+      ),
+    ),
+  );
+}
+
 function identityTokens(product: ProductIdentity) {
   return Array.from(
     new Set(
@@ -109,6 +175,24 @@ function identityTokens(product: ProductIdentity) {
       ),
     ),
   );
+}
+
+function compactTokensToQuery(tokens: string[]) {
+  return tokens
+    .filter((token) => {
+      if (token === "x" && tokens.length > 3) return false;
+      if (
+        /^[a-z]{2,4}x$/.test(token) &&
+        tokens.includes(token.slice(0, -1)) &&
+        tokens.includes("x")
+      ) {
+        return false;
+      }
+      return true;
+    })
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export function buildSearchQueries(product: ProductIdentity) {
@@ -124,9 +208,14 @@ export function buildSearchQueries(product: ProductIdentity) {
     .filter((token) => normalize(token) !== normalizedVendor)
     .join(" ")
     .trim();
+  const modelQuery = compactTokensToQuery(modelTokens(product));
+  const vendorModelQuery =
+    product.vendor && modelQuery ? `${product.vendor} ${modelQuery}` : null;
   const queries = [
     manualQuery,
     product.sku?.trim(),
+    vendorModelQuery,
+    modelQuery,
     title,
     withoutYear,
     product.vendor && withoutVendor
@@ -142,6 +231,23 @@ export function buildSearchQueries(product: ProductIdentity) {
     seen.add(key);
     return true;
   });
+}
+
+function tokenWeight(token: string) {
+  if (PRODUCT_TYPE_TOKENS.has(token)) return 0.35;
+  if (MATERIAL_OR_VARIANT_TOKENS.has(token)) return 0.65;
+  if (token === "x") return 0.45;
+  if (/\d/.test(token)) return 1.25;
+  return 1;
+}
+
+function weightedCoverage(tokens: string[], candidateTokens: Set<string>) {
+  const total = tokens.reduce((sum, token) => sum + tokenWeight(token), 0);
+  if (total <= 0) return 0;
+  const matched = tokens
+    .filter((token) => candidateTokens.has(token))
+    .reduce((sum, token) => sum + tokenWeight(token), 0);
+  return matched / total;
 }
 
 export function scoreProductCandidate(
@@ -200,9 +306,43 @@ export function scoreProductCandidate(
   );
   const matched = tokens.filter((token) => candidateTokens.has(token)).length;
   if (matched < Math.min(2, tokens.length)) return 0;
-  const coverage = matched / tokens.length;
+  const importantModelTokens = modelTokens(product);
+  const matchedModelTokens = importantModelTokens.filter((token) =>
+    candidateTokens.has(token),
+  );
+  if (
+    importantModelTokens.length >= 2 &&
+    matchedModelTokens.length < Math.ceil(importantModelTokens.length * 0.6)
+  ) {
+    return 0;
+  }
+  if (importantModelTokens.length === 1 && matchedModelTokens.length === 0) {
+    return 0;
+  }
+
+  const coverage = weightedCoverage(tokens, candidateTokens);
+  const modelCoverage = importantModelTokens.length
+    ? weightedCoverage(importantModelTokens, candidateTokens)
+    : coverage;
   const precision = matched / Math.max(1, candidateTokens.size);
-  return coverage * 0.8 + precision * 0.2;
+  const vendorToken = normalize(product.vendor || "");
+  const vendorMatched = vendorToken ? candidateTokens.has(vendorToken) : false;
+  const strongModelMatch = modelCoverage >= 0.95;
+  const compactAliasMatched = importantModelTokens.some(
+    (token) => /^[a-z]{2,4}x$/.test(token) && candidateTokens.has(token),
+  );
+  const brandModelBonus = strongModelMatch && vendorMatched ? 0.13 : 0;
+  const score =
+    coverage * 0.55 + modelCoverage * 0.35 + precision * 0.1 + brandModelBonus;
+  if (vendorMatched && compactAliasMatched) {
+    return Math.max(score, 0.78);
+  }
+  if (score <= 1) return score;
+
+  const extraTokens = Array.from(candidateTokens).filter(
+    (token) => !tokens.includes(token),
+  ).length;
+  return Math.max(0, 1 - Math.min(0.08, extraTokens * 0.01));
 }
 
 export function extractSitemapLocations(xml: string) {

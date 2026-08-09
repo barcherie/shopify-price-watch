@@ -73,7 +73,7 @@ describe("product discovery", () => {
       vendor: "PSE",
       sku: null,
     };
-    expect(buildSearchQueries(product)).toContain("PSE Lazer X");
+    expect(buildSearchQueries(product)).toContain("PSE lazer x");
     expect(
       scoreProductCandidate(
         product,
@@ -81,6 +81,19 @@ describe("product discovery", () => {
         "PSE Lazer X",
       ),
     ).toBeGreaterThanOrEqual(0.72);
+  });
+
+  it("génère des requêtes courtes centrées sur la marque et le modèle", () => {
+    const queries = buildSearchQueries({
+      title: "Branches Kinetic Astonix ILF Cross Carbon/Foam",
+      vendor: "Kinetic",
+      sku: null,
+    });
+    expect(queries.slice(0, 3)).toEqual([
+      "Kinetic astonix",
+      "astonix",
+      "Branches Kinetic Astonix ILF Cross Carbon/Foam",
+    ]);
   });
 
   it("utilise le texte descriptif du bloc produit quand le lien est trop court", () => {
@@ -94,6 +107,34 @@ describe("product discovery", () => {
         product,
         "https://dianearcherie.com/branches/2419-branches-kinetic-astonix.html",
         "Branches KINETIC Astonix. Construites en carbone croisé (cross carbon) et noyau mousse (foam core), compatible ILF.",
+      ),
+    ).toBeGreaterThanOrEqual(0.72);
+  });
+
+  it("refuse un résultat qui partage seulement des mots génériques", () => {
+    expect(
+      scoreProductCandidate(
+        {
+          title: "Branches Kinetic Astonix ILF Cross Carbon/Foam",
+          vendor: "Kinetic",
+          sku: null,
+        },
+        "https://example.com/branches-ilf-carbon-foam",
+        "Branches ILF Carbon Foam",
+      ),
+    ).toBe(0);
+  });
+
+  it("accepte une fiche qui garde le modèle mais simplifie les matières", () => {
+    expect(
+      scoreProductCandidate(
+        {
+          title: "Branches Kinetic Astonix ILF Cross Carbon/Foam",
+          vendor: "Kinetic",
+          sku: null,
+        },
+        "https://example.com/branches-kinetic-astonix",
+        "Branches Kinetic Astonix",
       ),
     ).toBeGreaterThanOrEqual(0.72);
   });
